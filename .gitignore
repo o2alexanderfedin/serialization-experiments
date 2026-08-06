@@ -8,6 +8,11 @@ out/
 *.so
 *.dylib
 
+# .NET
+bin/
+obj/
+TestResults/
+
 # Dependencies
 node_modules/
 vendor/
