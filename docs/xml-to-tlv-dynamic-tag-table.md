@@ -120,10 +120,20 @@ structural walk validated cleanly. Only the *names* were wrong. The decoder assi
 the order literals appear in the byte stream, so it read `order` as id 0, and the second
 element's reference then resolved to `<order>` instead of `<line>`.
 
-This is the encoder/decoder table desync in its purest form, and note what did *not* catch
-it: length arithmetic, structural validation, and the `bytes written == measured size`
-assertion all pass. **Only a full round-trip back to source catches it** — which is the
-argument for making round-trip the primary test, not byte-count assertions.
+This is the encoder/decoder table desync in its purest form. Mutation testing against the
+implementation pins down exactly which checks catch it:
+
+| Check | Both passes consistently wrong | One pass wrong |
+|---|---|---|
+| Length arithmetic | passes | passes |
+| Structural validation (every `Length` covers its children) | passes | passes |
+| `bytes written == measured size` | **passes** — the passes agree with each other | catches it |
+| Golden byte vector | catches it | passes |
+| Round-trip to source | catches it | catches it |
+
+The assertion only detects the two passes *disagreeing*; an encoder that is uniformly wrong
+sails past it. Round-trip is the one check that catches both shapes, which is the argument
+for making it the primary test rather than byte-count assertions.
 
 ### Why the literal is embedded rather than a separate `DEFINE` frame
 
