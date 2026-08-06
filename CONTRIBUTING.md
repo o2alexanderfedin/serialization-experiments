@@ -10,6 +10,13 @@ git flow init -d              # main / develop, standard prefixes
 ./scripts/install-hooks.sh    # enables the versioned hooks in .githooks/
 ```
 
+> **git-flow edition matters.** `bugfix/*` branches and several conveniences exist only in
+> the maintained [AVH edition](https://github.com/petervanderdoes/gitflow-avh)
+> (`brew install git-flow-avh`). The original nvie build (`git flow version` → `0.4.1`) has no
+> `git flow bugfix` subcommand — create those branches manually with
+> `git checkout develop && git checkout -b bugfix/<name>`. Both editions are accepted by the
+> hooks and by `git-flow-guard`.
+
 ## Adding an experiment
 
 ```bash
