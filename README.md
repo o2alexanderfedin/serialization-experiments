@@ -26,15 +26,14 @@ git flow init -d          # aligns local config with main/develop
 
 ## Development
 
-This project uses **git-flow**. Direct commits to `main` and `develop` are blocked
-locally by a pre-commit hook and remotely by branch protection rules.
+This project uses **git-flow**. Direct commits to `main` and `develop` are blocked by a pre-commit hook.
 
 **Feature branches** (branch from & merge to `develop`):
 
 ```bash
 git flow feature start my-experiment    # creates feature/my-experiment
 # ...work, commit...
-git flow feature publish my-experiment  # push and open a PR into develop
+git flow feature finish my-experiment   # merges into develop
 ```
 
 **Release branches** (branch from `develop`, merge to `main` + `develop`):
@@ -70,14 +69,13 @@ git flow bugfix start my-fix
 
 ## Enforcement
 
-Git-flow is enforced at three layers:
+Git-flow is enforced by versioned hooks in `.githooks/`:
 
-1. **Local `pre-commit` hook** — rejects commits made directly on `main` / `develop`.
-2. **Local `pre-push` hook** — rejects pushes to `main` / `develop` and pushes of
-   branches that violate git-flow naming.
-3. **GitHub** — branch protection on `main` and `develop` (pull request required,
-   force-push and deletion blocked) plus the `git-flow-guard` Actions workflow, which
-   fails any PR whose head/base pair is not a legal git-flow transition.
+1. **`pre-commit`** — rejects commits made directly on `main` / `develop`.
+2. **`pre-push`** — rejects branches that violate git-flow naming.
+
+On GitHub, `main` and `develop` block force-pushes and deletion.
+
 
 Run `./scripts/install-hooks.sh` after cloning to install the local hooks (they live in
 `.githooks/` and are versioned; the script points `core.hooksPath` at them).
