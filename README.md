@@ -10,11 +10,32 @@ stating the hypothesis, method, and results.
 ## Layout
 
 ```
+csharp/               # C# solution — the harness experiments are written against
+  src/SerializationExperiments/         # ISerializer + one class per candidate format
+  tests/SerializationExperiments.Tests/ # round-trip / correctness contract per candidate
 experiments/          # one directory per experiment, self-contained
   <name>/
     README.md         # hypothesis, method, results
 docs/                 # cross-experiment notes and comparisons
 ```
+
+Language harnesses live at the top level (`csharp/`, and siblings later) because a
+solution spans many experiments; `experiments/<name>/` holds the write-up for a single
+question and points at the code that answers it.
+
+## C#
+
+Requires the .NET 10 SDK (pinned in `csharp/global.json`).
+
+```bash
+cd csharp
+dotnet build      # warnings are errors
+dotnet test
+```
+
+`ISerializer` is the seam every candidate implements, so measurement code never depends
+on which library is underneath. `SystemTextJsonSerializer` is the in-the-box baseline any
+alternative has to beat to justify its dependency.
 
 ## Setup
 

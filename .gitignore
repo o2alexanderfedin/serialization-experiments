@@ -8,6 +8,16 @@ out/
 *.so
 *.dylib
 
+# .NET
+bin/
+obj/
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.user
+.vs/
+project.lock.json
+artifacts/
+
 # Dependencies
 node_modules/
 vendor/

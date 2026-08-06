@@ -1,0 +1,22 @@
+root = true
+
+[*]
+indent_style = space
+insert_final_newline = true
+charset = utf-8
+
+[*.{cs,csproj,props,targets}]
+indent_size = 4
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[tests/**/*.cs]
+# Test method names read as sentences: Round_trip_preserves_a_record.
+# CA1707 (no underscores in member names) is a library-API rule and does not apply here.
+dotnet_diagnostic.CA1707.severity = none
+
+# Tests bind to ISerializer on purpose — they verify the contract every candidate must
+# satisfy, not one implementation. CA1859 (prefer the concrete type for speed) would
+# defeat that, and devirtualization is irrelevant in a test fixture.
+dotnet_diagnostic.CA1859.severity = none
