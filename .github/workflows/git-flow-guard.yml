@@ -14,6 +14,7 @@ name: git-flow-guard
 on:
   pull_request:
     types: [opened, reopened, synchronize, edited]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,6 +37,14 @@ jobs:
             echo "::error title=git-flow violation::$1"
             exit 1
           }
+
+          # A prefix alone is not a branch name: reject 'feature/', 'hotfix/', ...
+          case "$HEAD_REF" in
+            feature/*|bugfix/*|release/*|hotfix/*|support/*)
+              [ -n "${HEAD_REF#*/}" ] || \
+                fail "Branch '$HEAD_REF' has an empty name after the '${HEAD_REF%%/*}/' prefix."
+              ;;
+          esac
 
           case "$HEAD_REF" in
             feature/*|bugfix/*)
