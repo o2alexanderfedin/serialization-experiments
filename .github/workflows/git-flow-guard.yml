@@ -1,0 +1,68 @@
+name: git-flow-guard
+
+# Fails any pull request whose head -> base pair is not a legal git-flow transition.
+#
+# Legal transitions:
+#   feature/*  -> develop
+#   bugfix/*   -> develop
+#   release/*  -> main, develop
+#   hotfix/*   -> main, develop
+#   support/*  -> main
+#   develop    -> main          (release train)
+#   main       -> develop       (back-merge after release/hotfix)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-branches:
+    name: Validate git-flow branch topology
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check head -> base transition
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          echo "Pull request: '$HEAD_REF' -> '$BASE_REF'"
+
+          fail() {
+            echo "::error title=git-flow violation::$1"
+            exit 1
+          }
+
+          case "$HEAD_REF" in
+            feature/*|bugfix/*)
+              [ "$BASE_REF" = "develop" ] || \
+                fail "'$HEAD_REF' must target 'develop', not '$BASE_REF'."
+              ;;
+            release/*|hotfix/*)
+              case "$BASE_REF" in
+                main|develop) ;;
+                *) fail "'$HEAD_REF' must target 'main' or 'develop', not '$BASE_REF'." ;;
+              esac
+              ;;
+            support/*)
+              [ "$BASE_REF" = "main" ] || \
+                fail "'$HEAD_REF' must target 'main', not '$BASE_REF'."
+              ;;
+            develop)
+              [ "$BASE_REF" = "main" ] || \
+                fail "'develop' may only be merged into 'main', not '$BASE_REF'."
+              ;;
+            main)
+              [ "$BASE_REF" = "develop" ] || \
+                fail "'main' may only be back-merged into 'develop', not '$BASE_REF'."
+              ;;
+            *)
+              fail "Branch '$HEAD_REF' does not follow git-flow naming (feature/, bugfix/, release/, hotfix/, support/)."
+              ;;
+          esac
+
+          echo "✅ '$HEAD_REF' -> '$BASE_REF' is a valid git-flow transition."

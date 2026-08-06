@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# git-flow guard: block direct pushes to protected remote branches and
+# reject pushing branches whose names violate git-flow conventions.
+#
+# stdin format (per git docs): <local ref> <local sha> <remote ref> <remote sha>
+set -uo pipefail
+
+PROTECTED='^(main|develop)$'
+VALID='^(feature|release|hotfix|bugfix|support)/.+'
+ZERO='0000000000000000000000000000000000000000'
+
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Deletions are handled by GitHub branch protection; nothing to check locally.
+  [[ "$local_sha" == "$ZERO" ]] && continue
+
+  remote_branch="${remote_ref#refs/heads/}"
+
+  if [[ $remote_branch =~ $PROTECTED ]]; then
+    cat >&2 <<EOF
+
+❌ Direct push to '$remote_branch' is not allowed.
+
+'$remote_branch' is protected on GitHub and only accepts merges from pull requests.
+
+  feature/*, bugfix/*  ->  PR into develop
+  release/*, hotfix/*  ->  PR into main (then back-merge into develop)
+
+Publish your branch and open a PR instead:
+    git flow feature publish <name>
+    gh pr create --base develop
+
+(Emergency escape hatch: git push --no-verify)
+
+EOF
+    status=1
+    continue
+  fi
+
+  if [[ ! $remote_branch =~ $VALID ]]; then
+    cat >&2 <<EOF
+
+❌ Branch '$remote_branch' does not follow git-flow naming conventions.
+
+Expected one of:
+  feature/<name>     bugfix/<name>     release/<version>
+  hotfix/<version>   support/<name>
+
+Rename before pushing:
+    git branch -m feature/<name>
+
+EOF
+    status=1
+  fi
+done
+
+exit $status

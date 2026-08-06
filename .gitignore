@@ -1,0 +1,38 @@
+# Build output
+target/
+build/
+dist/
+out/
+*.o
+*.a
+*.so
+*.dylib
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Benchmark & experiment artifacts
+*.log
+bench-results/
+*.prof
+*.heapsnapshot
+
+# Generated serialization code (regenerate from schemas)
+gen/
+generated/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Environment
+.env
+.env.local

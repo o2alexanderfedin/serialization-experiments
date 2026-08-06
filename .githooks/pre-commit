@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# git-flow guard: prevent direct commits to protected branches
+# and warn on branches that ignore git-flow naming conventions.
+set -uo pipefail
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+PROTECTED_BRANCHES='^(main|develop)$'
+VALID_BRANCH_PATTERN='^(feature|release|hotfix|bugfix|support)/.+'
+
+if [[ $BRANCH =~ $PROTECTED_BRANCHES ]]; then
+  cat >&2 <<EOF
+
+❌ Direct commits to '$BRANCH' are not allowed.
+
+Protected branches: main, develop
+
+Use git-flow instead:
+
+  New feature / experiment:
+    git flow feature start <name>
+    # ...work...
+    git flow feature publish <name>   # then open a PR into develop
+
+  Bugfix on develop:
+    git flow bugfix start <name>
+
+  Release:
+    git flow release start <version>  # then open a PR into main
+
+  Hotfix:
+    git flow hotfix start <version>   # then open a PR into main
+
+Or manually:
+    git checkout develop
+    git checkout -b feature/<name>
+
+(Emergency escape hatch: git commit --no-verify)
+
+EOF
+  exit 1
+fi
+
+if [[ ! $BRANCH =~ $VALID_BRANCH_PATTERN ]]; then
+  cat >&2 <<EOF
+
+⚠️  Branch '$BRANCH' does not follow git-flow naming conventions.
+
+Expected one of:
+  feature/<name>     New features and experiments
+  bugfix/<name>      Fixes targeting develop
+  release/<version>  Release preparation
+  hotfix/<version>   Urgent production fixes
+  support/<name>     Long-lived support branches
+
+Commit allowed, but this branch cannot be merged by the git-flow-guard workflow.
+
+EOF
+fi
+
+exit 0
