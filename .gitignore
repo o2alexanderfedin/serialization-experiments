@@ -12,6 +12,7 @@ out/
 bin/
 obj/
 TestResults/
+BenchmarkDotNet.Artifacts/
 
 # Dependencies
 node_modules/
