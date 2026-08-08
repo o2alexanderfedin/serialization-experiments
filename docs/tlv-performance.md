@@ -18,12 +18,21 @@ Reproduce:
 ```bash
 cd experiments/csharp
 dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- --filter '*'
+dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- sizes
+dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- alloc
 ```
 
 **These are ShortRun numbers and several have an error bar wider than the mean** — the
-`text-heavy`/100 `EncodeToArray` row reports 23.2 μs ± 225 μs. Treat the allocation columns
-as solid (they are counted, not sampled) and the timings as indicative only. Re-run without
-`--job short` before relying on any specific duration.
+`text-heavy`/100 `EncodeToArray` row reports 23.2 μs ± 225 μs. Treat the timings as
+indicative only, and re-run without `--job short` before relying on any specific duration.
+
+> **Correction.** An earlier version of this section said to treat the allocation columns as
+> solid, "counted, not sampled". That is wrong. `MemoryDiagnoser` reports a total divided by
+> an auto-scaled operation count, so one-time costs amortise differently between runs; two
+> runs of *identical* code moved the `MeasureOnly` rows by up to 95%. Byte counts now come
+> from the `alloc` report, which reads the thread allocation counter around one warmed-up
+> call and reproduces exactly. The `Allocated` columns in the tables below are kept as the
+> historical record of the run they came from, not as current figures.
 
 Document shapes, each 100 and 1000 elements:
 
@@ -92,59 +101,105 @@ the same node count, differing only in whether names collapse to a one-byte refe
 run predates value interning; both shapes have all-distinct values, so only names are
 involved.)
 
-## Finding 1 — the emit pass allocates O(payload), contradicting the design
+## Findings 1–3 — all three resolved
 
-`text-heavy`/1000 produces roughly 207 KB of output. Writing it to a `CountingSink`, which
-stores nothing at all, still allocates **314 KB**. The measuring pass over the same tree
-allocates 32 KB.
+### First, a correction
 
-The cause is in the emit pass:
+Findings 1 and 2 were originally written against `text-heavy`/1000 as a ~207 KB document
+allocating 314 KB to a sink that stores nothing, and 997 KB to an array — *"the only row in
+the run to touch Gen2 and the large object heap."*
+
+**Those numbers no longer describe anything.** Value interning landed after they were
+written, and every one of `text-heavy`'s 1000 text nodes holds the same 200-character
+string, so 999 of them collapsed to 3-byte references. The shape now encodes to **6,219
+bytes**, not 207 KB. There is no LOH row left in the run, and `text-heavy` turned out to be
+close to the *least* affected shape rather than the worst.
+
+Both findings were still real. They were simply attributed to the wrong shape and the wrong
+magnitude, because nobody re-derived them after the format changed underneath. Re-measuring
+before fixing is what caught it.
+
+### And a change of instrument
+
+BenchmarkDotNet's `MemoryDiagnoser` divides a total by an auto-scaled operation count, so
+one-time costs amortise differently between runs. Across two runs of the same code it moved
+`MeasureOnly` — which had not changed at all — by up to **95%**. That is far too noisy to
+attribute a 20% change to an edit.
+
+Allocation is now measured by `dotnet run -c Release --project bench/… -- alloc`, which
+reads the thread's allocation counter around a single warmed-up call. It reproduces
+byte-for-byte across runs. Timing stays in BenchmarkDotNet; only the byte counts moved.
+
+### Finding 1 — the emit pass allocated one array per literal
 
 ```csharp
-sink.Write(Encoding.UTF8.GetBytes(text.Value));   // a byte[] per text node
+sink.Write(Encoding.UTF8.GetBytes(text.Value));            // a byte[] per text node
 byte[] nameBytes = Encoding.UTF8.GetBytes(element.Name);   // and per literal name
 ```
 
-Every string is transcoded into a freshly allocated array that is written once and dropped.
-The measuring pass avoids this because `GetByteCount` allocates nothing — which is exactly
-why its allocation ratio falls to 0.10 on the text-heavy shape.
+Every string was transcoded into a freshly allocated array, written once, and dropped. The
+measuring pass avoided it because `GetByteCount` allocates nothing.
 
-So the design's claim holds in one sense and fails in another: the encoder never *holds* the
-payload, but it does *allocate* it, as short-lived garbage. Peak live memory is O(depth) plus
-the size cache; total allocation is O(payload).
+Literals up to 256 UTF-8 bytes now transcode through the stack, and longer ones borrow from
+`ArrayPool`. The saving scales with the number of **distinct** literals, which is what makes
+the near-zero rows below a confirmation rather than a disappointment:
 
-Fix: transcode into a stack or pooled buffer via
-`Encoding.UTF8.GetBytes(ReadOnlySpan<char>, Span<byte>)` instead of the array-returning
-overload. The exact byte count is already known from the measuring pass.
+| Shape (1000) | distinct literals | before | after | change |
+|---|---:|---:|---:|---:|
+| `unique` | ~2000 | 300,552 | 236,520 | −21.3% |
+| `values-unique` | ~1001 | 174,584 | 134,520 | −22.9% |
+| `repeated` | ~1001 | 166,584 | 134,520 | −19.3% |
+| `deep` | ~1001 | 166,528 | 134,488 | −19.2% |
+| `values-repeat` | ~11 | 33,760 | 33,296 | −1.4% |
+| `text-heavy` | ~3 | 32,808 | 32,520 | −0.9% |
 
-## Finding 2 — `Encode(Node)` ignores the size it just computed
+Bytes allocated by the emit pass, computed as encode-to-counter minus measure.
 
-`EncodeToArray` allocates 997 KB for the same ~207 KB document — 3.18× the counter baseline,
-and the only row in the run to touch Gen2 and the large object heap (Gen0, Gen1 and Gen2 all
-report 181.64).
+The design's claim now holds in both senses: the encoder neither holds nor allocates the
+payload. What remains is the second `Tables` — the emit pass builds its interning
+dictionaries from empty, by design — which is the bulk of what is left.
 
-The cause is that `Encode(Node)` writes into a default `MemoryStream`, which doubles its
-buffer as it grows and then copies once more in `ToArray()`. Every intermediate buffer past
-85 KB lands on the LOH.
+### Finding 2 — `Encode(Node)` ignored the size it had just computed
 
-This is avoidable for free: the measuring pass has already computed the exact output length.
-Allocating a single `byte[]` of precisely that size and writing into it removes the doubling,
-the copy, and the LOH traffic in one change.
+It wrote into a default `MemoryStream`, which doubles its buffer as it grows, then copied
+once more in `ToArray()` — despite the measuring pass having already computed the exact
+length. It now allocates one `byte[]` of precisely that size and writes into it through a
+`BufferSink` that throws rather than growing, since an overrun means the two passes
+disagreed, which is corruption and not a full buffer.
 
-## Finding 3 — the encoder can produce documents its own decoder rejects
+Allocation beyond producing the bytes, as a multiple of the output size — 1.00x means one
+allocation of exactly the output and nothing else:
 
-`Decode`/`deep`/1000 is the `NA` in the decode table. It did not run slowly; it threw.
+| Shape (1000) | before | after |
+|---|---:|---:|
+| `repeated` | 3.54x | **1.00x** |
+| `unique` | 4.01x | **1.00x** |
+| `deep` | 3.54x | **1.00x** |
+| `text-heavy` | 3.63x | **1.01x** |
+| `values-repeat` | 3.68x | **1.01x** |
+| `values-unique` | 3.18x | **1.00x** |
 
-The decoder caps nesting at 512 frames to bound stack usage. The encoder has no
-corresponding limit, so a 1000-deep chain encodes without complaint and then fails to decode
-with *"Nesting deeper than 512"*. Existing round-trip coverage used depth 300 and never
-noticed.
+### Finding 3 — the encoder could produce documents its own decoder rejected
 
-`DepthLimitTests` now pins all three halves of this: the encoder accepts it, the decoder
-rejects it, and round-trip still works just under the limit. The behaviour is deliberate on
-the decoder's side, so the open question is which way to resolve the asymmetry — cap the
-encoder to match, raise the decoder limit, or make the limit a documented parameter of the
-format rather than an implementation detail.
+`Decode`/`deep`/1000 was the `NA` in the decode table. It did not run slowly; it threw.
+
+The decoder capped nesting at 512 frames to bound stack use — a `StackOverflowException`
+cannot be caught, so bounding it is not optional for code reading bytes it did not produce.
+The encoder had no corresponding limit, so a 1000-deep chain encoded without complaint and
+then failed to decode. Round-trip coverage used depth 300 and never reached it.
+
+The limit is now one shared constant, `TlvLimits.MaxDepth`, stated as part of the format
+rather than privately in the decoder, and the encoder enforces it **in the measuring pass**
+so a rejected tree leaves the sink untouched instead of half-written.
+
+Enforcing on one side only is worse than not enforcing at all: it moves the failure from the
+point the tree is built to the far end of the wire. Note also what the cap does *not* do —
+it is no defence against amplification, where a shallow document references one large
+subtree repeatedly. That needs a traversal budget.
+
+The `deep` benchmark shape asked for 1,000 frames, which is no longer a legal document. It
+is clamped to the limit, and both text reports say so rather than implying the requested
+depth was measured.
 
 ## Value interning — measured after the fact
 
@@ -241,3 +296,7 @@ has not been measured.
   rather than inferring it.
 - Deflate chained onto the output, and its interaction with skipping.
 - Documents large enough for the size cache (one `long` per node) to matter.
+- Timings re-run without `--job short`, now that the allocation question is settled and only
+  the durations remain unreliable.
+- The emit pass's second `Tables`, which is now the largest remaining allocation and is
+  inherent to the two-pass design rather than incidental to it.
