@@ -17,21 +17,14 @@ public class EncodeBenchmarks
 {
     private Node tree = null!;
 
-    [Params("repeated", "unique", "deep", "text-heavy")]
+    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique")]
     public string Shape { get; set; } = "repeated";
 
     [Params(100, 1_000)]
     public int Size { get; set; }
 
     [GlobalSetup]
-    public void Setup() => this.tree = this.Shape switch
-    {
-        "repeated" => Documents.RepeatedNames(this.Size),
-        "unique" => Documents.UniqueNames(this.Size),
-        "deep" => Documents.Deep(this.Size),
-        "text-heavy" => Documents.TextHeavy(this.Size, textLength: 200),
-        _ => throw new ArgumentOutOfRangeException(nameof(this.Shape)),
-    };
+    public void Setup() => this.tree = Documents.Build(this.Shape, this.Size);
 
     /// <summary>Pass 1 alone: walks the tree, produces no bytes.</summary>
     [Benchmark]

@@ -7,6 +7,25 @@ namespace SerializationExperiments.Benchmarks;
 /// </summary>
 internal static class Documents
 {
+    /// <summary>Shape names, in the order they should appear in a report.</summary>
+    internal static readonly string[] Shapes =
+        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique"];
+
+    /// <summary>Builds a shape by name, so every harness measures the same documents.</summary>
+    /// <param name="shape">One of <see cref="Shapes"/>.</param>
+    /// <param name="count">Element count, or chain depth for <c>deep</c>.</param>
+    /// <returns>The document tree.</returns>
+    internal static Node Build(string shape, int count) => shape switch
+    {
+        "repeated" => RepeatedNames(count),
+        "unique" => UniqueNames(count),
+        "deep" => Deep(count),
+        "text-heavy" => TextHeavy(count, textLength: 200),
+        "values-repeat" => ValuesRepeat(count),
+        "values-unique" => ValuesUnique(count),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown document shape."),
+    };
+
     /// <summary>
     /// Many siblings sharing one tag name — the case interning is built for. Every element
     /// after the first encodes its name as a single byte.
@@ -50,6 +69,45 @@ internal static class Documents
         }
 
         return node;
+    }
+
+    /// <summary>
+    /// Values drawn from a small vocabulary — status codes, country codes, enum-like data.
+    /// The realistic case for value interning.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately identical to <see cref="ValuesUnique"/> in every respect except value
+    /// repetition: same element name, same child count, same 10-character value length. The
+    /// pair therefore isolates interning's effect from everything else.
+    /// </remarks>
+    internal static Node ValuesRepeat(int count, int vocabularySize = 10)
+    {
+        Node[] children = new Node[count];
+        for (int index = 0; index < count; index++)
+        {
+            children[index] = new ElementNode(
+                "status",
+                [new TextNode(FormattableString.Invariant($"value-{index % vocabularySize:D4}"))]);
+        }
+
+        return new ElementNode("feed", children);
+    }
+
+    /// <summary>
+    /// Every value distinct — the control for <see cref="ValuesRepeat"/>, and the shape
+    /// where interning is pure overhead.
+    /// </summary>
+    internal static Node ValuesUnique(int count)
+    {
+        Node[] children = new Node[count];
+        for (int index = 0; index < count; index++)
+        {
+            children[index] = new ElementNode(
+                "status",
+                [new TextNode(FormattableString.Invariant($"value-{index:D4}"))]);
+        }
+
+        return new ElementNode("feed", children);
     }
 
     /// <summary>

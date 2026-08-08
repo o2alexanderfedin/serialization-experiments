@@ -15,7 +15,7 @@ public class DecodeBenchmarks
 {
     private byte[] encoded = [];
 
-    [Params("repeated", "unique", "deep", "text-heavy")]
+    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique")]
     public string Shape { get; set; } = "repeated";
 
     [Params(100, 1_000)]
@@ -27,14 +27,7 @@ public class DecodeBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        Node tree = this.Shape switch
-        {
-            "repeated" => Documents.RepeatedNames(this.Size),
-            "unique" => Documents.UniqueNames(this.Size),
-            "deep" => Documents.Deep(this.Size),
-            "text-heavy" => Documents.TextHeavy(this.Size, textLength: 200),
-            _ => throw new ArgumentOutOfRangeException(nameof(this.Shape)),
-        };
+        Node tree = Documents.Build(this.Shape, this.Size);
 
         this.encoded = TlvEncoder.Encode(tree);
     }

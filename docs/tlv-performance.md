@@ -29,10 +29,17 @@ Document shapes, each 100 and 1000 elements:
 
 | Shape | Structure |
 |---|---|
-| `repeated` | siblings all named `line` — the case interning is built for |
-| `unique` | every element a distinct name — worst case for the table |
+| `repeated` | siblings all named `line`, values all distinct — repeated *names* |
+| `unique` | every element a distinct name — worst case for the name table |
 | `deep` | one chain, so recursion depth equals node count |
-| `text-heavy` | repeated names with 200-character text, payload dominating structure |
+| `text-heavy` | repeated names with one identical 200-character value — interning's best case |
+| `values-repeat` | values drawn from a 10-word vocabulary — the realistic enum-like case |
+| `values-unique` | identical to `values-repeat` but every value distinct — the control |
+
+`values-repeat` and `values-unique` are a matched pair: same element name, same child count,
+same 10-character value length, so their XML is byte-for-byte the same size. The only
+variable between them is whether values repeat, which isolates value interning from
+everything else.
 
 `MeasureOnly` is pass 1 alone. `EncodeToCounter` is both passes into a `CountingSink`
 (baseline). `EncodeToArray` is both passes into a real buffer.
@@ -80,8 +87,10 @@ of a full encode across every shape, so the emit pass costs about the same as th
 pass plus the write itself — the "~2× traversal CPU" estimate is sound. Measuring is
 genuinely cheap: it does no I/O and, for text, only calls `GetByteCount`.
 
-**Interning pays.** `repeated`/1000 encodes in 61 μs against 142 μs for `unique`/1000 — the
-same node count, differing only in whether names collapse to a one-byte reference.
+**Name interning pays.** `repeated`/1000 encodes in 61 μs against 142 μs for `unique`/1000 —
+the same node count, differing only in whether names collapse to a one-byte reference. (This
+run predates value interning; both shapes have all-distinct values, so only names are
+involved.)
 
 ## Finding 1 — the emit pass allocates O(payload), contradicting the design
 
@@ -142,12 +151,6 @@ format rather than an implementation detail.
 Text values are now interned like element names (`TEXT` literal assigns an id, `TEXT_REF`
 references it). Same machine, same ShortRun job, so the numbers above are the "before".
 
-**Caveat on the shapes:** only `text-heavy` repeats its values — all 1000 children share one
-identical 200-byte string, which is interning's theoretical best case. `repeated` and
-`unique` both have all-distinct values (`value0`…`value999`); `repeated` refers to repeated
-*names*. So these shapes bracket the extremes and none of them models a realistic middle,
-such as a small vocabulary of status codes.
-
 ### Size
 
 ```bash
@@ -160,9 +163,34 @@ dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- siz
 | unique | 1000 | 28,687 | 21,792 | 76.0 % |
 | deep | 1000 | 20,790 | 12,889 | 62.0 % |
 | text-heavy | 1000 | 213,021 | 6,219 | **2.9 %** |
+| **values-repeat** | **1000** | **27,013** | **6,106** | **22.6 %** |
+| **values-unique** | **1000** | **27,013** | **15,016** | **55.6 %** |
 
-`text-heavy` against `unique` is the whole story: 2.9 % when every value repeats, 76 % when
-none do and only name interning and dropped close-tags are working.
+The matched pair is the cleanest measurement here. Identical XML at 27,013 bytes both, so
+value repetition is the only difference: **6,106 against 15,016 bytes, a 59 % reduction**
+from interning alone.
+
+`text-heavy` at 2.9 % is the theoretical ceiling — one identical 200-byte string reused
+1000 times — and should not be read as a realistic ratio. `values-repeat` at 22.6 % is the
+number to quote for enum-like data.
+
+### The matched pair, at 1000 elements
+
+Both shapes run with interning enabled; the only difference between them is whether values
+repeat. This measures *what repetition is worth*, not what interning costs — the before/after
+tables below measure that.
+
+| | `values-repeat` | `values-unique` | Difference |
+|---|---:|---:|---|
+| Encoded size | 6,106 B | 15,016 B | **59 % smaller** |
+| Encode (`EncodeToArray`) | 121.2 μs | 147.1 μs | 18 % faster |
+| Encode allocation | **57.2 KB** | 349.5 KB | **84 % less** |
+| Decode | 55.1 μs | 73.3 μs | 25 % faster |
+| Decode allocation | 157.8 KB | 220.1 KB | 28 % less |
+
+Repetition wins on every axis at once. The encode-allocation gap is the largest because a
+referenced value is never transcoded to UTF-8 a second time, and the value table holds ten
+entries instead of a thousand.
 
 ### Encode — `EncodeToArray`, what a caller actually pays
 

@@ -19,12 +19,16 @@ public static class TlvDecoder
 
     /// <summary>Decodes a complete document.</summary>
     /// <param name="data">Encoded document; must be consumed exactly.</param>
+    /// <param name="options">
+    /// Decoder behaviour the format does not dictate. Defaults to
+    /// <see cref="TlvDecoderOptions.Default"/>.
+    /// </param>
     /// <returns>The decoded tree.</returns>
     /// <exception cref="TlvFormatException">The bytes are malformed, truncated, or have trailing content.</exception>
-    public static Node Decode(ReadOnlySpan<byte> data)
+    public static Node Decode(ReadOnlySpan<byte> data, TlvDecoderOptions? options = null)
     {
         int offset = 0;
-        var tables = new Tables();
+        var tables = new Tables(options ?? TlvDecoderOptions.Default);
         Node root = DecodeNode(data, ref offset, tables, depth: 0);
 
         if (offset != data.Length)
@@ -84,8 +88,13 @@ public static class TlvDecoder
                         $"Value reference frame ending at {offset} does not fill its length, which ends at {end}.");
                 }
 
-                // The existing instance: a reference costs no UTF-8 decode and no allocation.
-                return new TextNode(tables.Values[(int)valueId]);
+                string referenced = tables.Values[(int)valueId];
+
+                // Sharing the instance costs no UTF-8 decode and no allocation, and is
+                // unobservable for immutable strings. Callers whose object model attaches
+                // meaning to reference identity can opt out.
+                return new TextNode(
+                    tables.Options.ShareValueInstances ? referenced : new string(referenced.AsSpan()));
 
             case TlvType.Element:
                 return DecodeElement(data, ref offset, end, tables, depth);
@@ -150,8 +159,10 @@ public static class TlvDecoder
     /// <summary>
     /// Interning state rebuilt from the byte stream alone; nothing is shared with the encoder.
     /// </summary>
-    private sealed class Tables
+    private sealed class Tables(TlvDecoderOptions options)
     {
+        internal TlvDecoderOptions Options { get; } = options;
+
         internal List<string> Names { get; } = [];
 
         internal List<string> Values { get; } = [];

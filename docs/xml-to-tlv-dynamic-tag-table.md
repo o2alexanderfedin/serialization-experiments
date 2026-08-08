@@ -202,6 +202,45 @@ of the same hazards:
 - **Canonical encoding** — the rule is *always reference a value already seen*, so one
   document has one encoding.
 
+### `TEXT_REF` is compression, not identity
+
+**A `TEXT_REF` asserts that two values are equal, never that they are the same object.**
+It carries no identity semantics whatsoever. This is the same split CBOR makes between tag
+25/256 `stringref` — a string table purely for compression — and tags 28/29
+`sharable`/`shared reference`, which do preserve identity. Two different tags because they
+mean two different things.
+
+The distinction is invisible on the wire but decisive in a decoder:
+
+| | Table keyed by | Asserts | Safe when |
+|---|---|---|---|
+| Content dedup (`TEXT_REF`) | value equality | "equal content, stored once" | values are immutable |
+| Identity preservation | reference equality | "the same object appears twice" | always — it is information |
+
+Sharing decoded strings is safe precisely because .NET strings are immutable, which is why
+the runtime interns literals already. The decoder still builds a fresh node per occurrence
+and shares only the underlying string.
+
+Because the format says nothing about identity, **whether the decoder shares instances is a
+decoder setting, not a wire concern** — `TlvDecoderOptions.ShareValueInstances`. Sharing is
+the default: it is free, unobservable for immutable strings, and the right answer for RPC,
+where values are transient data. Turning it off materialises a distinct instance per
+occurrence for callers whose object model attaches meaning to reference identity. Either way
+the same bytes decode to the same content, and re-encoding produces the same bytes.
+
+Generalising this to mutable objects would not be safe. Collapsing two equal-but-distinct
+objects into one changes behaviour the moment either is mutated; failing to preserve a
+genuinely shared reference duplicates it and makes cycles unrepresentable. If identity ever
+needs preserving, it must be a **separate type code with a table keyed on reference
+equality** (`ReferenceEqualityComparer` in .NET), never this one. Reserving that distinction
+now is what lets it be added later without a format break.
+
+Two things to know before going there: cycles force two-phase construction — the decoder
+must hand out a reference to an object it has not finished building, which is at odds with
+immutable records — and back-references enable amplification, where a small document
+referencing one large subtree repeatedly explodes on decode. Cap'n Proto's traversal limit
+exists for that; a depth cap alone would not catch it.
+
 ### Hashing
 
 No cryptographic hash is needed, and no digest goes on the wire. A `Dictionary<string, int>`

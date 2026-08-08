@@ -18,32 +18,20 @@ internal static class Sizes
         Console.WriteLine("| Shape | Size | XML bytes | TLV bytes | Ratio |");
         Console.WriteLine("|---|---:|---:|---:|---:|");
 
-        foreach ((string shape, int count) in new[]
+        foreach (string shape in Documents.Shapes)
         {
-            ("repeated", 100), ("repeated", 1_000),
-            ("unique", 100), ("unique", 1_000),
-            ("deep", 100), ("deep", 1_000),
-            ("text-heavy", 100), ("text-heavy", 1_000),
-        })
+            foreach (int count in new[] { 100, 1_000 })
         {
-            Node tree = Build(shape, count);
+            Node tree = Documents.Build(shape, count);
             int tlv = TlvEncoder.Encode(tree).Length;
             int xml = Encoding.UTF8.GetByteCount(RenderXml(tree));
 
             Console.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"| {shape} | {count} | {xml:N0} | {tlv:N0} | {(double)tlv / xml:P1} |"));
+            }
         }
     }
-
-    private static Node Build(string shape, int count) => shape switch
-    {
-        "repeated" => Documents.RepeatedNames(count),
-        "unique" => Documents.UniqueNames(count),
-        "deep" => Documents.Deep(count),
-        "text-heavy" => Documents.TextHeavy(count, textLength: 200),
-        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
-    };
 
     private static string RenderXml(Node node)
     {

@@ -117,7 +117,7 @@ public sealed class ValueInterningTests
     }
 
     [Fact]
-    public void A_referenced_value_decodes_to_the_same_string_instance()
+    public void A_referenced_value_decodes_to_the_same_string_instance_by_default()
     {
         // A reference needs no UTF-8 decode and no new allocation.
         Node decoded = TlvDecoder.Decode(TlvEncoder.Encode(Repeat("shared value", 3)));
@@ -128,6 +128,75 @@ public sealed class ValueInterningTests
         Assert.Equal(3, texts.Count);
         Assert.Same(texts[0], texts[1]);
         Assert.Same(texts[1], texts[2]);
+    }
+
+    [Fact]
+    public void Sharing_can_be_turned_off_for_distinct_instances()
+    {
+        byte[] encoded = TlvEncoder.Encode(Repeat("shared value", 3));
+
+        Node decoded = TlvDecoder.Decode(encoded, new TlvDecoderOptions { ShareValueInstances = false });
+
+        List<string> texts = [];
+        Collect(decoded, texts);
+
+        Assert.Equal(3, texts.Count);
+        Assert.NotSame(texts[0], texts[1]);
+        Assert.NotSame(texts[1], texts[2]);
+        Assert.Equal(texts[0], texts[1]);   // distinct instances, equal content
+    }
+
+    [Fact]
+    public void The_option_changes_instances_only_never_content()
+    {
+        // It is a decode-side choice: the same bytes yield the same document either way.
+        byte[] encoded = TlvEncoder.Encode(Repeat("shared value", 5));
+
+        Node shared = TlvDecoder.Decode(encoded, new TlvDecoderOptions { ShareValueInstances = true });
+        Node distinct = TlvDecoder.Decode(encoded, new TlvDecoderOptions { ShareValueInstances = false });
+
+        Assert.Equal(Render(shared), Render(distinct));
+        Assert.Equal(TlvEncoder.Encode(shared), TlvEncoder.Encode(distinct));
+    }
+
+    [Fact]
+    public void Values_drawn_from_a_small_vocabulary_round_trip()
+    {
+        // The realistic case interning targets: enum-like values repeating across many
+        // elements, interleaved rather than adjacent, so references point far back.
+        string[] vocabulary = ["pending", "approved", "rejected", "cancelled"];
+        Node[] children = new Node[40];
+        for (int index = 0; index < children.Length; index++)
+        {
+            children[index] = Element("status", Text(vocabulary[index % vocabulary.Length]));
+        }
+
+        Node tree = new ElementNode("feed", children);
+        byte[] encoded = TlvEncoder.Encode(tree);
+
+        Assert.Equal(Render(tree), Render(TlvDecoder.Decode(encoded)));
+
+        // Each distinct value is written exactly once, however far apart its uses are.
+        foreach (string word in vocabulary)
+        {
+            Assert.Equal(1, CountOccurrences(encoded, System.Text.Encoding.UTF8.GetBytes(word)));
+        }
+    }
+
+    [Fact]
+    public void Interleaved_repeats_reference_the_right_values()
+    {
+        // a b a b a — a decoder that mixed up ids would still produce well-formed output,
+        // so only comparing content catches it.
+        Node tree = Element(
+            "root",
+            Element("x", Text("alpha")),
+            Element("x", Text("beta")),
+            Element("x", Text("alpha")),
+            Element("x", Text("beta")),
+            Element("x", Text("alpha")));
+
+        Assert.Equal(Render(tree), Render(TlvDecoder.Decode(TlvEncoder.Encode(tree))));
     }
 
     [Fact]
