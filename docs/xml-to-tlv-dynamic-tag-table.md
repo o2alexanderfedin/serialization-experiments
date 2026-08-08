@@ -40,7 +40,8 @@ Little-endian varints (LEB128), 1-byte types.
 | `0x01` | `ELEMENT` | constructed | NameRef, optional literal, then child frames |
 | `0x02` | `TEXT` | primitive | UTF-8 bytes; assigns the next value id |
 | `0x03` | `TEXT_REF` | primitive | varint id of a value defined by an earlier `TEXT` |
-| `0x00`, `0x04`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
+| `0x04` | `TEXT_ONCE` | primitive | UTF-8 bytes; assigns **no** value id |
+| `0x00`, `0x05`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
 
 ### `ELEMENT` value
 
@@ -53,11 +54,15 @@ Little-endian varints (LEB128), 1-byte types.
 
 Child count is not stored — read frames until the parent's `Length` is consumed.
 
-### `TEXT` value
+### `TEXT` and `TEXT_ONCE` values
 
 | Order | Field | Size | Notes |
 |---|---|---|---|
-| 1 | `Chars` | `Length` B | UTF-8. Empty text is legal (`Length == 0`). Assigns the next value id |
+| 1 | `Chars` | `Length` B | UTF-8. Empty text is legal (`Length == 0`) |
+
+Byte-for-byte the same layout. The only difference is the id table: `TEXT` assigns the next
+value id, `TEXT_ONCE` assigns nothing. A decoder needs no other rule to keep its table in
+step with the encoder's.
 
 ### `TEXT_REF` value
 
@@ -183,12 +188,40 @@ feature they never use.
 ### The threshold
 
 `(k−1)(L−1)` is positive from `L = 2`, exactly zero at `L = 1`, and **negative at `L = 0`** —
-a 2-byte empty literal would be replaced by a 3-byte reference. So the encoder references
-only values of 2 bytes or more.
+a 2-byte empty literal would be replaced by a 3-byte reference. So a value is referenced
+only when it is at least 2 bytes long **and** occurs more than once.
 
-That threshold lives entirely in the encoder. **The decoder registers every `TEXT` literal it
-reads**, whether or not the encoder chose to reference it later, so ids stay in step without
-the decoder knowing the rule. Changing the threshold is therefore not a format change.
+The occurrence half of that rule is why `TEXT_ONCE` exists. A saving of exactly zero is not
+the same as free: an id claimed for no gain still consumes id space, and ids are varints, so
+enough wasted ids push later references from one byte into two. A value that will never be
+referenced should therefore claim nothing at all — and the decoder has to be told which
+literals those are, since it cannot know the encoder's rule.
+
+That rule still lives entirely in the encoder. It costs a third pass over the tree, before
+the measuring pass, to count occurrences: whether a value's first appearance claims an id
+depends on whether it will be seen again, which the measuring pass cannot know when it
+arrives there. What the decoder sees is only the type code, so the rule can be tuned — a
+different length threshold, a different occurrence threshold, frequency ordering — without
+a format change.
+
+#### What it is worth
+
+Nothing, on most documents. Of the seven benchmark shapes, six encode to byte-identical
+output. Their repeated values happen to appear near the start, claim low ids, and reference
+in one byte either way.
+
+The gain needs a document whose repeating vocabulary is not seen until late — a log whose
+recurring messages start after a long run of distinct ones. The `values-mixed` shape is
+that: 800 distinct values followed by 200 drawn from a vocabulary of 4.
+
+| Shape | Every literal claims an id | Only referenced values do |
+|---|---:|---:|
+| `values-mixed`, 1000 | 13,448 B | 13,252 B (−1.5%) |
+| the other six shapes | — | byte-identical |
+
+A 1.5% gain in the case it was built for, and nothing elsewhere. Worth keeping because it
+costs nothing on the wire and bounds a pathological case, but it is not why this format is
+small — value interning itself is, and that was already there.
 
 ### What it inherits
 
@@ -287,20 +320,25 @@ different feature, and a stateful one.
 | `0B` | `00` | NameRef | literal follows |
 | `0C` | `04` | NameLen | 4 |
 | `0D` | `6C 69 6E 65` | Name | `line` → **id 1** |
-| `11` | `02` | Type | TEXT |
+| `11` | `04` | Type | TEXT_ONCE |
 | `12` | `01` | Length | 1 |
-| `13` | `61` | Chars | `a` |
+| `13` | `61` | Chars | `a` — claims no id |
 | `14` | `01` | Type | ELEMENT |
 | `15` | `04` | Length | 4 |
 | `16` | `02` | NameRef | id 1 → `line`, no literal |
-| `17` | `02` | Type | TEXT |
+| `17` | `04` | Type | TEXT_ONCE |
 | `18` | `01` | Length | 1 |
-| `19` | `62` | Chars | `b` |
+| `19` | `62` | Chars | `b` — claims no id |
 
-Flat: `01 18 00 05 6F 72 64 65 72 01 09 00 04 6C 69 6E 65 02 01 61 01 04 02 02 01 62`
+Flat: `01 18 00 05 6F 72 64 65 72 01 09 00 04 6C 69 6E 65 04 01 61 01 04 02 04 01 62`
 
 The second `<line>` is 6 bytes against 11 for the first — the name collapsed to a single
 `02`.
+
+Both values are `TEXT_ONCE`: each occurs once, and neither reaches the 2-byte threshold, so
+neither claims an id. Note the two `04` bytes at `11` and `17` are type codes while the `04`
+at `0C` is a name length — a Type byte is only a Type byte at a frame boundary, which is why
+scanning a document for a type code finds false matches.
 
 ### Length arithmetic
 

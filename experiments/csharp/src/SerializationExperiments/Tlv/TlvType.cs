@@ -26,6 +26,18 @@ internal static class TlvType
     /// </remarks>
     internal const byte TextRef = 0x03;
 
+    /// <summary>
+    /// Primitive: UTF-8 bytes that claim no value id.
+    /// </summary>
+    /// <remarks>
+    /// Byte-for-byte the same shape as <see cref="Text"/>; the only difference is that it
+    /// adds nothing to the value table. That is what lets the encoder skip registering
+    /// values it can see will never be referenced, keeping the id space dense so the
+    /// references that do occur stay one byte for longer. Without a distinct code the
+    /// decoder could not tell which literals claimed an id, and the two sides would drift.
+    /// </remarks>
+    internal const byte TextOnce = 0x04;
+
     /// <summary>Deliberately unused, so a zero byte is never a valid Type.</summary>
     internal const byte Reserved = 0x00;
 }

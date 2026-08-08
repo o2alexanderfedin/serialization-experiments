@@ -30,8 +30,10 @@ public static class TlvEncoder
     /// <remarks>
     /// Over k occurrences of an L-byte value the saving is (k-1)(L-1): strictly positive
     /// from L=2, exactly zero at L=1, and negative at L=0 where a 2-byte empty literal
-    /// would be replaced by a 3-byte reference. The threshold lives only here — the decoder
-    /// registers every literal it sees, so it needs no knowledge of the rule.
+    /// would be replaced by a 3-byte reference. Paired with the occurrence test in
+    /// <see cref="Tables.ClaimsId"/>: a value must clear both to claim an id. The rule lives
+    /// only here — the decoder learns the outcome from the type code, so tuning it is not a
+    /// format change.
     /// </remarks>
     private const int MinInternedValueLength = 2;
 
@@ -62,7 +64,8 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(root);
 
         List<long> sizes = [];
-        long total = Measure(root, new Tables(), sizes, depth: 0);
+        Dictionary<string, int> occurrences = CountValues(root);
+        long total = Measure(root, new Tables(occurrences), sizes, depth: 0);
 
         if (total > Array.MaxLength)
         {
@@ -72,7 +75,7 @@ public static class TlvEncoder
         }
 
         byte[] result = new byte[total];
-        EmitMeasured(root, new BufferSink(result), sizes, total);
+        EmitMeasured(root, new BufferSink(result), sizes, total, occurrences);
         return result;
     }
 
@@ -91,21 +94,27 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(sink);
 
         List<long> sizes = [];
-        long expected = Measure(root, new Tables(), sizes, depth: 0);
-        return EmitMeasured(root, sink, sizes, expected);
+        Dictionary<string, int> occurrences = CountValues(root);
+        long expected = Measure(root, new Tables(occurrences), sizes, depth: 0);
+        return EmitMeasured(root, sink, sizes, expected, occurrences);
     }
 
     /// <summary>
     /// Runs the emit pass and checks it against what the measuring pass counted.
     /// </summary>
-    private static long EmitMeasured(Node root, IByteSink sink, List<long> sizes, long expected)
+    private static long EmitMeasured(
+        Node root,
+        IByteSink sink,
+        List<long> sizes,
+        long expected,
+        Dictionary<string, int> occurrences)
     {
         long before = sink.BytesWritten;
         int cursor = 0;
 
         // Fresh tables: the emit pass must rediscover names and values in the same order the
         // measuring pass did, or every length already counted would be wrong.
-        Emit(root, sink, sizes, ref cursor, new Tables());
+        Emit(root, sink, sizes, ref cursor, new Tables(occurrences));
 
         long written = sink.BytesWritten - before;
         if (written != expected)
@@ -126,7 +135,7 @@ public static class TlvEncoder
     public static long Measure(Node root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        return Measure(root, new Tables(), [], depth: 0);
+        return Measure(root, new Tables(CountValues(root)), [], depth: 0);
     }
 
     /// <summary>
@@ -151,18 +160,23 @@ public static class TlvEncoder
         switch (node)
         {
             case TextNode text:
-                if (tables.Values.TryGetValue(text.Value, out InternedValue seen) && seen.WorthReferencing)
+                if (tables.ValueIds.TryGetValue(text.Value, out int valueId))
                 {
-                    valueLength = Varint.Size((ulong)seen.Id);
+                    valueLength = Varint.Size((ulong)valueId);
                 }
                 else
                 {
                     int textBytes = Encoding.UTF8.GetByteCount(text.Value);
                     valueLength = textBytes;
 
-                    // Registered whether or not it is worth referencing, so ids stay in step
-                    // with the decoder, which registers every literal it reads.
-                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, textBytes));
+                    // An id is claimed only by a value that will actually be referenced. The
+                    // rest are emitted as TEXT_ONCE and register nothing, which keeps ids
+                    // dense; the decoder distinguishes the two by type code, so it needs no
+                    // knowledge of the rule that produced them.
+                    if (tables.ClaimsId(text.Value, textBytes))
+                    {
+                        tables.ValueIds.Add(text.Value, tables.ValueIds.Count);
+                    }
                 }
 
                 break;
@@ -184,9 +198,12 @@ public static class TlvEncoder
                 }
 
                 long children = 0;
-                foreach (Node child in element.Children)
+
+                // Indexed rather than foreach: Children is an IReadOnlyList, so foreach goes
+                // through IEnumerator and boxes one enumerator per element, per pass.
+                for (int child = 0; child < element.Children.Count; child++)
                 {
-                    children += Measure(child, tables, sizes, depth + 1);
+                    children += Measure(element.Children[child], tables, sizes, depth + 1);
                 }
 
                 valueLength = head + children;
@@ -216,20 +233,26 @@ public static class TlvEncoder
         switch (node)
         {
             case TextNode text:
-                if (tables.Values.TryGetValue(text.Value, out InternedValue seen) && seen.WorthReferencing)
+                if (tables.ValueIds.TryGetValue(text.Value, out int valueId))
                 {
                     sink.Write([TlvType.TextRef]);
                     Varint.Write((ulong)valueLength, sink);
-                    Varint.Write((ulong)seen.Id, sink);
+                    Varint.Write((ulong)valueId, sink);
                 }
                 else
                 {
                     // The measuring pass already counted this value's UTF-8 length, so the
                     // literal branch never rescans the string to size it.
-                    sink.Write([TlvType.Text]);
+                    bool claimsId = tables.ClaimsId(text.Value, (int)valueLength);
+
+                    sink.Write([claimsId ? TlvType.Text : TlvType.TextOnce]);
                     Varint.Write((ulong)valueLength, sink);
                     WriteUtf8(text.Value, (int)valueLength, sink);
-                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, (int)valueLength));
+
+                    if (claimsId)
+                    {
+                        tables.ValueIds.Add(text.Value, tables.ValueIds.Count);
+                    }
                 }
 
                 break;
@@ -253,9 +276,9 @@ public static class TlvEncoder
                     tables.Names.Add(element.Name, tables.Names.Count);
                 }
 
-                foreach (Node child in element.Children)
+                for (int child = 0; child < element.Children.Count; child++)
                 {
-                    Emit(child, sink, sizes, ref cursor, tables);
+                    Emit(element.Children[child], sink, sizes, ref cursor, tables);
                 }
 
                 break;
@@ -298,22 +321,75 @@ public static class TlvEncoder
     }
 
     /// <summary>
-    /// The interning state both passes build independently, from empty.
+    /// Counts how often each distinct text value occurs.
     /// </summary>
-    private sealed class Tables
+    /// <remarks>
+    /// Run before the measuring pass, because whether a value's first occurrence claims an id
+    /// depends on whether it will be seen again — which is not knowable at the moment the
+    /// measuring pass reaches it.
+    /// </remarks>
+    private static Dictionary<string, int> CountValues(Node root)
     {
-        internal Dictionary<string, int> Names { get; } = new(StringComparer.Ordinal);
+        Dictionary<string, int> counts = new(StringComparer.Ordinal);
+        CountValues(root, counts, depth: 0);
+        return counts;
+    }
 
-        internal Dictionary<string, InternedValue> Values { get; } = new(StringComparer.Ordinal);
+    private static void CountValues(Node node, Dictionary<string, int> counts, int depth)
+    {
+        // This pass recurses too, so it needs the same guard as the measuring pass; without
+        // it a too-deep tree would exhaust the stack here, before anything could reject it.
+        if (depth > TlvLimits.MaxDepth)
+        {
+            throw new ArgumentException(
+                $"Tree nests deeper than {TlvLimits.MaxDepth}, which no decoder will accept.",
+                nameof(node));
+        }
+
+        switch (node)
+        {
+            case TextNode text:
+                counts[text.Value] = counts.GetValueOrDefault(text.Value) + 1;
+                break;
+
+            case ElementNode element:
+                for (int child = 0; child < element.Children.Count; child++)
+                {
+                    CountValues(element.Children[child], counts, depth + 1);
+                }
+
+                break;
+
+            default:
+                throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node));
+        }
     }
 
     /// <summary>
-    /// A registered text value: its id, and whether referencing it actually saves bytes.
+    /// The interning state both passes build independently, from empty.
     /// </summary>
-    /// <param name="Id">Value id, assigned in first-occurrence document order.</param>
-    /// <param name="ByteCount">UTF-8 length, cached so neither pass recomputes it.</param>
-    private readonly record struct InternedValue(int Id, int ByteCount)
+    /// <param name="occurrences">
+    /// How often each value appears, from <see cref="CountValues(Node)"/>. Shared between the
+    /// passes because it is derived from the tree alone and cannot drift.
+    /// </param>
+    private sealed class Tables(Dictionary<string, int> occurrences)
     {
-        internal bool WorthReferencing => this.ByteCount >= MinInternedValueLength;
+        internal Dictionary<string, int> Names { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Values that claimed an id, in first-occurrence document order.</summary>
+        internal Dictionary<string, int> ValueIds { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Whether a value should claim an id, and so be emitted as <c>TEXT</c> rather than
+        /// <c>TEXT_ONCE</c>.
+        /// </summary>
+        /// <remarks>
+        /// Over k occurrences of an L-byte value, referencing saves (k-1)(L-1). That is zero
+        /// whenever k is 1 or L is 1, and an id claimed for no gain still consumes id space,
+        /// pushing later references from one varint byte into two. Both conditions are
+        /// therefore required.
+        /// </remarks>
+        internal bool ClaimsId(string value, int byteCount) =>
+            byteCount >= MinInternedValueLength && occurrences[value] > 1;
     }
 }

@@ -66,10 +66,19 @@ public static class TlvDecoder
                 string value = Encoding.UTF8.GetString(data[offset..end]);
                 offset = end;
 
-                // Every literal is registered, so ids stay in step with the encoder. Whether
-                // a repeat was worth referencing is the encoder's decision alone.
+                // The type code says this literal claims the next id. Why the encoder
+                // decided that — how often the value recurs, how long it is — is the
+                // encoder's business, and can change without touching this side.
                 tables.Values.Add(value);
                 return new TextNode(value);
+
+            case TlvType.TextOnce:
+                string once = Encoding.UTF8.GetString(data[offset..end]);
+                offset = end;
+
+                // Identical to TEXT except that it registers nothing, which is what keeps
+                // the id space dense enough for references to stay one byte.
+                return new TextNode(once);
 
             case TlvType.TextRef:
                 ulong valueId = Varint.Read(data, ref offset);

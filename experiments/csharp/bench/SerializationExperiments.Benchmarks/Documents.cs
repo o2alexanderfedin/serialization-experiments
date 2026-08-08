@@ -9,7 +9,7 @@ internal static class Documents
 {
     /// <summary>Shape names, in the order they should appear in a report.</summary>
     internal static readonly string[] Shapes =
-        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique"];
+        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed"];
 
     /// <summary>
     /// Note for reports whose <c>deep</c> rows were clamped by the format's depth limit.
@@ -37,6 +37,7 @@ internal static class Documents
         "text-heavy" => TextHeavy(count, textLength: 200),
         "values-repeat" => ValuesRepeat(count),
         "values-unique" => ValuesUnique(count),
+        "values-mixed" => ValuesMixed(count),
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown document shape."),
     };
 
@@ -119,6 +120,39 @@ internal static class Documents
             children[index] = new ElementNode(
                 "status",
                 [new TextNode(FormattableString.Invariant($"value-{index:D4}"))]);
+        }
+
+        return new ElementNode("feed", children);
+    }
+
+    /// <summary>
+    /// A long head of distinct values, then a tail that repeats a small vocabulary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other shapes cannot show what id density is worth. Their repeated values appear
+    /// near the start of the document, so they claim low ids and their references stay one
+    /// varint byte whether or not distinct values also claim ids.
+    /// </para>
+    /// <para>
+    /// Here the repeating vocabulary is not seen until most of the document has gone by — a
+    /// log whose recurring messages start late, or a table whose status column only becomes
+    /// repetitive after a header of distinct fields. If every distinct value claims an id,
+    /// the vocabulary lands past 127 and each reference costs two varint bytes instead of one.
+    /// </para>
+    /// </remarks>
+    internal static Node ValuesMixed(int count, int vocabularySize = 4)
+    {
+        int head = count * 4 / 5;
+        Node[] children = new Node[count];
+
+        for (int index = 0; index < count; index++)
+        {
+            string value = index < head
+                ? FormattableString.Invariant($"value-{index:D4}")
+                : FormattableString.Invariant($"state-{index % vocabularySize:D4}");
+
+            children[index] = new ElementNode("status", [new TextNode(value)]);
         }
 
         return new ElementNode("feed", children);

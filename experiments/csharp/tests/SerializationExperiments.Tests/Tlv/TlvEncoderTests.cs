@@ -17,10 +17,10 @@ public sealed class TlvEncoderTests
         0x00, 0x05, 0x6F, 0x72, 0x64, 0x65, 0x72,       // literal "order" -> id 0
         0x01, 0x09,                                     // ELEMENT, value length 9
         0x00, 0x04, 0x6C, 0x69, 0x6E, 0x65,             // literal "line"  -> id 1
-        0x02, 0x01, 0x61,                               // TEXT "a"
+        0x04, 0x01, 0x61,                               // TEXT_ONCE "a" (claims no id)
         0x01, 0x04,                                     // ELEMENT, value length 4
         0x02,                                           // NameRef 2 -> id 1 ("line")
-        0x02, 0x01, 0x62,                               // TEXT "b"
+        0x04, 0x01, 0x62,                               // TEXT_ONCE "b" (claims no id)
     ];
 
     [Fact]

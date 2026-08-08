@@ -37,6 +37,20 @@ public sealed class DepthLimitTests
     }
 
     [Fact]
+    public void A_pathologically_deep_tree_is_refused_without_exhausting_the_stack()
+    {
+        // One frame past the limit does not distinguish a guard on every recursive pass from
+        // a guard on only one of them, because whichever runs first reports the failure. This
+        // depth does: any pass that recurses unguarded reaches a StackOverflowException, which
+        // cannot be caught and takes the test host down rather than failing an assertion.
+        Node absurd = Chain(100_000);
+
+        Assert.Throws<ArgumentException>(() => TlvEncoder.Encode(absurd));
+        Assert.Throws<ArgumentException>(() => TlvEncoder.Measure(absurd));
+        Assert.Throws<ArgumentException>(() => TlvEncoder.Encode(absurd, new CountingSink()));
+    }
+
+    [Fact]
     public void Measure_refuses_it_too()
     {
         // Measure is public, and callers size buffers from it before encoding.
