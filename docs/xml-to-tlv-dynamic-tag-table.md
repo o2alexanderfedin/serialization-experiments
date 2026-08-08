@@ -97,7 +97,21 @@ where its one child ends is malformed.
 | 0 – 127 | 1 | `0vvvvvvv` |
 | 128 – 16 383 | 2 | `1vvvvvvv 0vvvvvvv` |
 | 16 384 – 2²¹−1 | 3 | `1vvvvvvv 1vvvvvvv 0vvvvvvv` |
-| … | up to 5 | High bit = continuation; 7 payload bits per byte, least-significant group first |
+| … | up to 10 | High bit = continuation; 7 payload bits per byte, least-significant group first |
+
+**Only the shortest encoding of a value is legal.** LEB128 permits padding — `80 00` and
+`00` both denote zero — and a decoder must reject the padded forms.
+
+This is a correctness requirement, not tidiness. If a value has more than one valid
+encoding, a document has more than one valid byte representation: decoding and re-encoding
+it stops being byte-identical, and anywhere the bytes are hashed or signed, two different
+documents verify as one. That is the BER/DER signature-bypass shape, and it is why DER
+exists as a canonical subset of BER at all.
+
+The same rule bounds the top: a value must fit in 64 bits. The tenth byte carries only bit
+63, so an encoding with payload bits above it is rejected rather than having them silently
+shifted off the end — otherwise distinct byte sequences would read back as the same number,
+which is the padding problem again by another route.
 
 ## No static table
 

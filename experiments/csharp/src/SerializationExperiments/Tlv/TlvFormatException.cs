@@ -11,12 +11,4 @@ public sealed class TlvFormatException : Exception
         : base(message)
     {
     }
-
-    /// <summary>Initializes a new instance with a message and an originating error.</summary>
-    /// <param name="message">Description of the fault.</param>
-    /// <param name="innerException">Underlying cause.</param>
-    public TlvFormatException(string message, Exception innerException)
-        : base(message, innerException)
-    {
-    }
 }

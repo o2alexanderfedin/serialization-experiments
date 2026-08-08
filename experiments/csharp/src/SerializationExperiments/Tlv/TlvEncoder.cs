@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace SerializationExperiments.Tlv;
@@ -391,7 +392,12 @@ public static class TlvEncoder
         switch (node)
         {
             case TextNode text:
-                counts[text.Value] = counts.GetValueOrDefault(text.Value) + 1;
+                // One probe, not a read followed by a write. These keys are hashed once per
+                // pass and the strings can be long — on a document of 200-character values
+                // the second hash was measurable.
+                ref int occurrences = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    counts, text.Value, out _);
+                occurrences++;
                 break;
 
             case TypedNode typed:

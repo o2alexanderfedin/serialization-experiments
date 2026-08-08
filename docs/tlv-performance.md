@@ -79,16 +79,34 @@ everything else.
 
 ## Decode
 
-| Shape | Size | Mean | Allocated |
-|---|---|---:|---:|
-| deep | 100 | 6.98 μs | 17.82 KB |
-| deep | 1000 | **NA** | **NA** |
-| repeated | 100 | 8.24 μs | 20.29 KB |
-| repeated | 1000 | 63.75 μs | 196.08 KB |
-| text-heavy | 100 | 11.82 μs | 57.80 KB |
-| text-heavy | 1000 | 154.76 μs | 571.09 KB |
-| unique | 100 | 8.69 μs | 26.23 KB |
-| unique | 1000 | 83.52 μs | 251.24 KB |
+MediumRun, all eight shapes. Error bars are 3–9% of the mean here rather than wider than it,
+which is the difference a real job makes.
+
+| Shape | Size | Mean | Error | Allocated |
+|---|---|---:|---:|---:|
+| deep | 100 | 6.94 μs | ±0.20 | 17.93 KB |
+| deep | 1000 | 42.28 μs | ±1.27 | 88.35 KB |
+| repeated | 100 | 7.32 μs | ±0.19 | 20.40 KB |
+| repeated | 1000 | 76.41 μs | ±3.16 | 196.19 KB |
+| text-heavy | 100 | 6.79 μs | ±0.22 | 16.97 KB |
+| text-heavy | 1000 | 66.72 μs | ±2.39 | 157.60 KB |
+| typed | 100 | 8.80 μs | ±0.29 | 20.59 KB |
+| typed | 1000 | 88.92 μs | ±2.47 | 189.35 KB |
+| unique | 100 | 8.92 μs | ±0.38 | 26.34 KB |
+| unique | 1000 | 92.75 μs | ±3.61 | 251.35 KB |
+| values-mixed | 100 | 8.15 μs | ±0.89 | 20.49 KB |
+| values-mixed | 1000 | 77.35 μs | ±4.85 | 194.88 KB |
+| values-repeat | 100 | 7.69 μs | ±0.68 | 17.26 KB |
+| values-repeat | 1000 | 65.22 μs | ±2.13 | 157.89 KB |
+| values-unique | 100 | 7.06 μs | ±0.21 | 21.19 KB |
+| values-unique | 1000 | 74.23 μs | ±3.30 | 204.01 KB |
+
+`deep`/1000 was `NA` in the first run — it threw, because the encoder produced a document its
+own decoder rejected. That is finding 3, now fixed, and the shape is clamped to the format's
+depth limit.
+
+The old `text-heavy` rows are gone for the same reason as elsewhere in this document: they
+were measured before value interning, when that shape was 207 KB rather than 6.2 KB.
 
 ## What held up
 
