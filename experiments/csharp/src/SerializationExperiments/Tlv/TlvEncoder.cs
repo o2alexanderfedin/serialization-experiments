@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 
 namespace SerializationExperiments.Tlv;
@@ -34,16 +35,45 @@ public static class TlvEncoder
     /// </remarks>
     private const int MinInternedValueLength = 2;
 
+    /// <summary>
+    /// Longest UTF-8 literal encoded through the stack rather than a pooled array.
+    /// </summary>
+    /// <remarks>
+    /// Covers every element name and the overwhelming majority of text values without
+    /// touching the pool. <see cref="WriteUtf8"/> is never inlined — a method containing
+    /// <c>stackalloc</c> cannot be — so the space is reclaimed on return rather than
+    /// accumulating across the encoder's recursion.
+    /// </remarks>
+    private const int MaxStackUtf8 = 256;
+
     /// <summary>Encodes <paramref name="root"/> to a new array.</summary>
     /// <param name="root">Tree to encode.</param>
     /// <returns>The encoded document.</returns>
+    /// <remarks>
+    /// The measuring pass already knows the exact output length, so the array is allocated
+    /// once at that size. Writing through a growable buffer instead would pay for a doubling
+    /// chain and a final copy to hand back a right-sized array.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The document is larger than the largest possible array.
+    /// </exception>
     public static byte[] Encode(Node root)
     {
         ArgumentNullException.ThrowIfNull(root);
 
-        using var buffer = new MemoryStream();
-        Encode(root, new StreamSink(buffer));
-        return buffer.ToArray();
+        List<long> sizes = [];
+        long total = Measure(root, new Tables(), sizes);
+
+        if (total > Array.MaxLength)
+        {
+            throw new InvalidOperationException(
+                $"Document measures {total} bytes, past the {Array.MaxLength}-byte array limit. " +
+                $"Encode into a stream sink instead.");
+        }
+
+        byte[] result = new byte[total];
+        EmitMeasured(root, new BufferSink(result), sizes, total);
+        return result;
     }
 
     /// <summary>Encodes <paramref name="root"/> into <paramref name="sink"/>.</summary>
@@ -62,7 +92,14 @@ public static class TlvEncoder
 
         List<long> sizes = [];
         long expected = Measure(root, new Tables(), sizes);
+        return EmitMeasured(root, sink, sizes, expected);
+    }
 
+    /// <summary>
+    /// Runs the emit pass and checks it against what the measuring pass counted.
+    /// </summary>
+    private static long EmitMeasured(Node root, IByteSink sink, List<long> sizes, long expected)
+    {
         long before = sink.BytesWritten;
         int cursor = 0;
 
@@ -175,11 +212,12 @@ public static class TlvEncoder
                 }
                 else
                 {
-                    byte[] textBytes = Encoding.UTF8.GetBytes(text.Value);
+                    // The measuring pass already counted this value's UTF-8 length, so the
+                    // literal branch never rescans the string to size it.
                     sink.Write([TlvType.Text]);
                     Varint.Write((ulong)valueLength, sink);
-                    sink.Write(textBytes);
-                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, textBytes.Length));
+                    WriteUtf8(text.Value, (int)valueLength, sink);
+                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, (int)valueLength));
                 }
 
                 break;
@@ -194,10 +232,10 @@ public static class TlvEncoder
                 }
                 else
                 {
-                    byte[] nameBytes = Encoding.UTF8.GetBytes(element.Name);
+                    int nameBytes = Encoding.UTF8.GetByteCount(element.Name);
                     Varint.Write(0, sink);
-                    Varint.Write((ulong)nameBytes.Length, sink);
-                    sink.Write(nameBytes);
+                    Varint.Write((ulong)nameBytes, sink);
+                    WriteUtf8(element.Name, nameBytes, sink);
 
                     // Registered before descending, matching the measuring pass exactly.
                     tables.Names.Add(element.Name, tables.Names.Count);
@@ -212,6 +250,38 @@ public static class TlvEncoder
 
             default:
                 throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node));
+        }
+    }
+
+    /// <summary>
+    /// Writes the UTF-8 bytes of <paramref name="text"/> without allocating an array to hold
+    /// them.
+    /// </summary>
+    /// <param name="text">String to encode.</param>
+    /// <param name="byteCount">Its UTF-8 length, already known to the caller.</param>
+    /// <param name="sink">Destination.</param>
+    /// <remarks>
+    /// The array-returning <see cref="Encoding.GetBytes(string)"/> allocates once per literal,
+    /// which on a document of all-distinct names and values is one garbage array per node.
+    /// Short strings go through the stack; anything longer borrows from the array pool.
+    /// </remarks>
+    private static void WriteUtf8(string text, int byteCount, IByteSink sink)
+    {
+        if (byteCount <= MaxStackUtf8)
+        {
+            Span<byte> buffer = stackalloc byte[MaxStackUtf8];
+            sink.Write(buffer[..Encoding.UTF8.GetBytes(text, buffer)]);
+            return;
+        }
+
+        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            sink.Write(rented.AsSpan(0, Encoding.UTF8.GetBytes(text, rented)));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 

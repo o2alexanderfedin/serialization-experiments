@@ -17,15 +17,22 @@ public static class Program
 {
     /// <summary>Dispatches to BenchmarkDotNet's switcher, which parses the arguments.</summary>
     /// <param name="args">
-    /// BenchmarkDotNet arguments, e.g. <c>--filter</c> and <c>--job</c>. The one exception is
-    /// <c>sizes</c>, which prints encoded sizes per shape and exits — payload size is a
-    /// property of the format, not something a timing harness measures.
+    /// BenchmarkDotNet arguments, e.g. <c>--filter</c> and <c>--job</c>. Two exceptions print
+    /// a report and exit, because both are exact rather than sampled and a timing harness
+    /// only adds noise to them: <c>sizes</c> for encoded payload size, and <c>alloc</c> for
+    /// bytes allocated per encode.
     /// </param>
     public static void Main(string[] args)
     {
         if (args is ["sizes", ..])
         {
             Sizes.Report();
+            return;
+        }
+
+        if (args is ["alloc", ..])
+        {
+            Allocations.Report();
             return;
         }
 
