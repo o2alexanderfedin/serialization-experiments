@@ -51,6 +51,14 @@ internal static class Sizes
                 builder.Append(text.Value);
                 break;
 
+            case TypedNode typed:
+                // The nearest attribute-free XML equivalent of a type tag is an extra
+                // wrapping element, so that is what the comparison charges it.
+                builder.Append('<').Append(typed.TypeName).Append('>');
+                RenderXml(typed.Inner, builder);
+                builder.Append("</").Append(typed.TypeName).Append('>');
+                break;
+
             case ElementNode element:
                 builder.Append('<').Append(element.Name).Append('>');
                 foreach (Node child in element.Children)

@@ -9,7 +9,7 @@ internal static class Documents
 {
     /// <summary>Shape names, in the order they should appear in a report.</summary>
     internal static readonly string[] Shapes =
-        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed"];
+        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed"];
 
     /// <summary>
     /// Note for reports whose <c>deep</c> rows were clamped by the format's depth limit.
@@ -38,6 +38,7 @@ internal static class Documents
         "values-repeat" => ValuesRepeat(count),
         "values-unique" => ValuesUnique(count),
         "values-mixed" => ValuesMixed(count),
+        "typed" => Typed(count),
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown document shape."),
     };
 
@@ -153,6 +154,30 @@ internal static class Documents
                 : FormattableString.Invariant($"state-{index % vocabularySize:D4}");
 
             children[index] = new ElementNode("status", [new TextNode(value)]);
+        }
+
+        return new ElementNode("feed", children);
+    }
+
+    /// <summary>
+    /// <see cref="ValuesRepeat"/> with every child wrapped in a type tag.
+    /// </summary>
+    /// <remarks>
+    /// A matched pair with <c>values-repeat</c>, in the same spirit as
+    /// <c>values-repeat</c>/<c>values-unique</c>: identical element names, identical values,
+    /// identical child count. The only difference is the type tag on each child, so the gap
+    /// between the two shapes is exactly what polymorphism costs — nothing else moves.
+    /// </remarks>
+    internal static Node Typed(int count, int typeCount = 4)
+    {
+        var untyped = (ElementNode)ValuesRepeat(count);
+        Node[] children = new Node[count];
+
+        for (int index = 0; index < count; index++)
+        {
+            children[index] = new TypedNode(
+                FormattableString.Invariant($"Shape{index % typeCount}"),
+                untyped.Children[index]);
         }
 
         return new ElementNode("feed", children);

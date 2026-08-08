@@ -362,6 +362,12 @@ public sealed class ValueInterningTests
             case TextNode text:
                 texts.Add(text.Value);
                 break;
+            case TypedNode typed:
+                // Without this arm a typed subtree would be skipped in silence, and any test
+                // using this helper on one would pass by collecting nothing.
+                Collect(typed.Inner, texts);
+                break;
+
             case ElementNode element:
                 foreach (Node child in element.Children)
                 {
@@ -369,6 +375,9 @@ public sealed class ValueInterningTests
                 }
 
                 break;
+
+            default:
+                throw new InvalidOperationException($"Unhandled node type {node.GetType()}.");
         }
     }
 

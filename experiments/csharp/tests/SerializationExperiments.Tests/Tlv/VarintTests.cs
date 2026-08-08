@@ -69,6 +69,89 @@ public sealed class VarintTests
         });
     }
 
+    [Theory]
+    [InlineData(new byte[] { 0x80, 0x00 })]                                     // 0 in two bytes
+    [InlineData(new byte[] { 0x81, 0x00 })]                                     // 1 in two bytes
+    [InlineData(new byte[] { 0xFF, 0x00 })]                                     // 127 in two bytes
+    [InlineData(new byte[] { 0x80, 0x80, 0x00 })]                               // 0 in three
+    [InlineData(new byte[] { 0x80, 0x81, 0x00 })]                               // 128 in three
+    public void Read_rejects_a_padded_encoding(byte[] padded)
+    {
+        // LEB128 lets the same number be written several ways. Accepting more than the
+        // shortest would give a document more than one valid byte representation, which
+        // breaks canonical re-encoding and, where the bytes are hashed or signed, is the
+        // BER/DER signature-bypass shape.
+        Assert.Throws<TlvFormatException>(() =>
+        {
+            int offset = 0;
+            Varint.Read(padded, ref offset);
+        });
+    }
+
+    [Fact]
+    public void Read_accepts_the_shortest_encoding_of_the_same_values()
+    {
+        // The control for the case above: these are the canonical forms of 0, 1, 127 and 128.
+        Assert.Equal(0UL, ReadAll([0x00]));
+        Assert.Equal(1UL, ReadAll([0x01]));
+        Assert.Equal(127UL, ReadAll([0x7F]));
+        Assert.Equal(128UL, ReadAll([0x80, 0x01]));
+    }
+
+    [Fact]
+    public void Read_rejects_a_value_that_does_not_fit_in_64_bits()
+    {
+        // The tenth byte carries only bit 63. Payload bits above it used to be shifted off
+        // the end and dropped, so several encodings read back as the same number.
+        byte[] tooLarge = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F];
+
+        Assert.Throws<TlvFormatException>(() =>
+        {
+            int offset = 0;
+            Varint.Read(tooLarge, ref offset);
+        });
+    }
+
+    [Fact]
+    public void Read_accepts_the_largest_value_that_does_fit()
+    {
+        // ulong.MaxValue: nine full groups then bit 63 alone.
+        byte[] largest = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+
+        Assert.Equal(ulong.MaxValue, ReadAll(largest));
+        Assert.Equal(largest, Encode(ulong.MaxValue));
+    }
+
+    [Fact]
+    public void A_document_with_a_padded_length_is_rejected()
+    {
+        // The reason this matters, end to end: the documented example with its root Length
+        // written as [98 00] instead of [18]. It used to decode and then re-encode one byte
+        // shorter, so a document had two valid encodings.
+        byte[] padded =
+        [
+            0x01, 0x98, 0x00,
+            0x00, 0x05, 0x6F, 0x72, 0x64, 0x65, 0x72,
+            0x01, 0x09,
+            0x00, 0x04, 0x6C, 0x69, 0x6E, 0x65,
+            0x04, 0x01, 0x61,
+            0x01, 0x04,
+            0x02,
+            0x04, 0x01, 0x62,
+        ];
+
+        TlvFormatException error = Assert.Throws<TlvFormatException>(() => TlvDecoder.Decode(padded));
+        Assert.Contains("padded", error.Message, StringComparison.Ordinal);
+    }
+
+    private static ulong ReadAll(byte[] data)
+    {
+        int offset = 0;
+        ulong value = Varint.Read(data, ref offset);
+        Assert.Equal(data.Length, offset);
+        return value;
+    }
+
     private static byte[] Encode(ulong value)
     {
         using var buffer = new MemoryStream();

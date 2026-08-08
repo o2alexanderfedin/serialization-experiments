@@ -17,7 +17,7 @@ public class EncodeBenchmarks
 {
     private Node tree = null!;
 
-    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique")]
+    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed")]
     public string Shape { get; set; } = "repeated";
 
     [Params(100, 1_000)]
