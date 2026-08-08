@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-08T19:27:25.883Z",
+  "phase": null,
+  "phase_name": "TLV serialization experiment (not a GSD-structured project)",
+  "phase_dir": ".planning",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "context": "default",
+  "context_ambiguity": "This repo has no .planning/phases, spikes, sketches or deliberations. Work is driven conversationally, not by GSD plans, so no phase could be detected. Handoff written to the default location.",
+  "head": "24f5e8a",
+  "branch": "develop",
+  "tree_state": "clean — everything committed, merged to main, and pushed",
+  "completed_tasks": [
+    {"id": 1, "name": "Repo scaffold with git-flow enforcement", "status": "done", "commit": "feee314"},
+    {"id": 2, "name": "Design note: TLV length prefixes without buffering", "status": "done", "commit": "4b4bc2f"},
+    {"id": 3, "name": "Design note: open-vocabulary XML onto TLV via dynamic tag table", "status": "done", "commit": "4707132"},
+    {"id": 4, "name": "Two-pass TLV encoder and decoder", "status": "done", "commit": "3576adc"},
+    {"id": 5, "name": "Move C# solution under experiments/", "status": "done", "commit": "f76e485"},
+    {"id": 6, "name": "BenchmarkDotNet perf harness", "status": "done", "commit": "c76d81b"},
+    {"id": 7, "name": "Perf report with three findings", "status": "done", "commit": "e63a5a7"},
+    {"id": 8, "name": "Value interning (TEXT/TEXT_REF)", "status": "done", "commit": "eabc081"},
+    {"id": 9, "name": "values-repeat/values-unique shapes + configurable instance sharing", "status": "done", "commit": "24f5e8a"}
+  ],
+  "remaining_tasks": [
+    {"id": 10, "name": "Finding 1 — emit pass allocates a byte[] per string; use the span-based Encoding.UTF8.GetBytes overload", "status": "not_started", "kind": "mechanical_fix", "evidence": "text-heavy/1000 encodes ~207KB of output into a CountingSink that stores nothing, yet allocates 314KB"},
+    {"id": 11, "name": "Finding 2 — Encode(Node) ignores the length the measuring pass computed; pre-size the buffer", "status": "not_started", "kind": "mechanical_fix", "evidence": "997KB allocated for a 207KB document, the only row in the run to hit Gen2 and the LOH"},
+    {"id": 12, "name": "Finding 3 — encoder emits documents its own decoder rejects (depth 512 cap)", "status": "not_started", "kind": "design_decision", "options": ["cap the encoder to match", "raise the decoder limit", "make the limit a documented format parameter"]},
+    {"id": 13, "name": "Type as raw byte vs varint", "status": "not_started", "kind": "design_decision", "note": "byte-identical on today's wire; only changes the ceiling on the type space"},
+    {"id": 14, "name": "Intern only values the measuring pass sees more than once", "status": "not_started", "kind": "measurable_idea", "note": "would cut interning's tax on all-distinct-value documents"},
+    {"id": 15, "name": "README.md and experiments/README.md do not describe experiments/csharp/", "status": "not_started", "kind": "doc_wording"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Choose how to resolve findings 10-15", "context": "All are optional; none block anything. Findings 1 and 2 have measured evidence and no design question attached, so they are the cheapest real wins.", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Type carries node category (ELEMENT/TEXT/TEXT_REF), never the tag name", "rationale": "Keeps the TLV registry tiny while the XML vocabulary stays open; identity moves into the value as an interned name"},
+    {"decision": "Two-pass encode: measure into a cache, then emit from it", "rationale": "TLV puts Length before Value; buffering the value would cost O(payload). Peak memory becomes O(depth) plus one long per node"},
+    {"decision": "Name and value ids assigned pre-order, before descending, and never written to the wire", "rationale": "Both sides derive the same ids from document order; putting ids on the wire would cost bytes and add a desync mode"},
+    {"decision": "Both passes build tables from empty; emit pass gets fresh tables", "rationale": "Carrying pass 1's populated table into pass 2 makes every measured length too large and produces a silently truncated document"},
+    {"decision": "TEXT_REF as a separate type code rather than a ValueRef field inside TEXT", "rationale": "Saving becomes (k-1)(L-1) instead of L(k-1)-k, so values that never repeat cost exactly what they did before interning existed"},
+    {"decision": "Reference only values of 2+ bytes", "rationale": "(k-1)(L-1) is zero at L=1 and negative at L=0, where a 2-byte empty literal would become a 3-byte reference"},
+    {"decision": "The intern threshold lives only in the encoder; the decoder registers every literal", "rationale": "Ids stay in step without the decoder knowing the rule, so tuning the threshold is not a format change"},
+    {"decision": "No cryptographic hash, and no digest on the wire", "rationale": "Dictionary<string,_> resolves collisions by comparing strings. A SHA-256 reference would be ~34 bytes framed, breaking even only above ~33, against 3 for an ordinal"},
+    {"decision": "TEXT_REF asserts equality, never sameness", "rationale": "Matches CBOR's split between stringref (tag 25) and sharable (tags 28/29). Identity preservation, if ever needed, requires a separate type code keyed on reference equality"},
+    {"decision": "Instance sharing is a decoder option, defaulting to share", "rationale": "The format says nothing about identity. Sharing is free and unobservable for immutable strings, and correct for RPC"},
+    {"decision": "Solo git-flow, no pull requests", "rationale": "User works alone; PR-based enforcement was removed and replaced with local hooks plus force-push/deletion protection"},
+    {"decision": "main fast-forwarded to develop, no version tags", "rationale": "User's explicit choice, applied consistently since"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Nothing is in flight. Ask the user which of tasks 10-15 to take, or wait for a new direction. Findings 1 and 2 are the cheapest evidence-backed wins.",
+  "context_notes": "Conversational design-then-build loop: settle a format question in discussion, write it into docs/, implement against the doc, benchmark, and record findings back into docs/tlv-performance.md. Every change goes through a git-flow feature branch because the repo's own pre-commit hook blocks direct commits on main and develop. Verification standard in this project is high: claims get checked against reality (independent re-implementation of the hex vector, mutation testing of the encoder, freshness checks on benchmark artifacts) rather than asserted."
+}
