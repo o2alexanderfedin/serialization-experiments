@@ -4,16 +4,39 @@ A sandbox for experiments with serialization formats, codecs, and schema evoluti
 strategies — benchmarking throughput, payload size, and ergonomics across candidates
 (JSON, MessagePack, CBOR, Protobuf, FlatBuffers, Cap'n Proto, Avro, Bincode, …).
 
-Each experiment is self-contained under `experiments/<name>/` with its own README
-stating the hypothesis, method, and results.
+Experiments live under `experiments/`, in one of two shapes. A self-contained experiment
+gets its own directory with a README stating the hypothesis, method, and results — copy
+`experiments/_template/` to start one. Work that needs a real build, test suite, and
+benchmark harness instead gets a language workspace, such as `experiments/csharp/`, whose
+write-ups live in `docs/`.
 
 ## Layout
 
 ```
-experiments/          # one directory per experiment, self-contained
-  <name>/
+experiments/
+  _template/          # copy this to start a self-contained experiment
     README.md         # hypothesis, method, results
-docs/                 # cross-experiment notes and comparisons
+  csharp/             # .NET workspace shared by the C# experiments
+    SerializationExperiments.sln
+    src/              # implementation
+    tests/            # xUnit tests
+    bench/            # BenchmarkDotNet harness
+docs/                 # design notes, wire-format specs, and measured results
+```
+
+The TLV codec currently under `experiments/csharp/` is documented in
+[`docs/xml-to-tlv-dynamic-tag-table.md`](docs/xml-to-tlv-dynamic-tag-table.md) (wire
+format), [`docs/tlv-length-prefix-without-buffering.md`](docs/tlv-length-prefix-without-buffering.md)
+(why encoding is two passes), and [`docs/tlv-performance.md`](docs/tlv-performance.md)
+(numbers).
+
+## Building the C# workspace
+
+```bash
+cd experiments/csharp
+dotnet build SerializationExperiments.sln
+dotnet test SerializationExperiments.sln
+dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- --filter '*' --job short
 ```
 
 ## Setup
