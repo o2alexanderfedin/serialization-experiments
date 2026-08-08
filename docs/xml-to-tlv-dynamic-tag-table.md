@@ -38,8 +38,9 @@ Little-endian varints (LEB128), 1-byte types.
 | Value | Name | Kind | Value contains |
 |---|---|---|---|
 | `0x01` | `ELEMENT` | constructed | NameRef, optional literal, then child frames |
-| `0x02` | `TEXT` | primitive | UTF-8 bytes |
-| `0x00`, `0x03`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
+| `0x02` | `TEXT` | primitive | UTF-8 bytes; assigns the next value id |
+| `0x03` | `TEXT_REF` | primitive | varint id of a value defined by an earlier `TEXT` |
+| `0x00`, `0x04`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
 
 ### `ELEMENT` value
 
@@ -56,7 +57,13 @@ Child count is not stored — read frames until the parent's `Length` is consume
 
 | Order | Field | Size | Notes |
 |---|---|---|---|
-| 1 | `Chars` | `Length` B | UTF-8. Empty text is legal (`Length == 0`) |
+| 1 | `Chars` | `Length` B | UTF-8. Empty text is legal (`Length == 0`). Assigns the next value id |
+
+### `TEXT_REF` value
+
+| Order | Field | Size | Notes |
+|---|---|---|---|
+| 1 | `ValueId` | 1–5 B | varint id of a value defined by an earlier `TEXT` frame |
 
 ### `NameRef`
 
@@ -147,6 +154,64 @@ for making it the primary test rather than byte-count assertions.
 The last row decides it. Under either scheme, a decoder skipping an unknown subtree must
 still walk it to pick up definitions that later siblings may reference; the embedded form at
 least makes that hazard visible in the structure.
+
+## Interning text values
+
+Tag names are not the only thing that repeats. Documents repeat *values* too — enums,
+country codes, status flags, dates, booleans-as-text — so text is interned by the same
+mechanism: the first occurrence carries the literal and assigns the next id, later
+occurrences are a short reference.
+
+### Why a separate type instead of a discriminator field
+
+Names put a `NameRef` field inside every `ELEMENT`, because an element frame carries
+children as well and cannot be split by type. Text has no such constraint: the value *is*
+the whole payload, so a reference can be its own type code. That distinction is worth a
+byte on every text node.
+
+For a value of *L* bytes appearing *k* times:
+
+| Design | Literal | Reference | Saving |
+|---|---|---|---|
+| `ValueRef` field inside `TEXT` | `2 + L + 1` | 3 | `L(k−1) − k` |
+| Separate `TEXT_REF` type | `2 + L` — unchanged | 3 | `(k−1)(L−1)` |
+
+The second is never worse than not interning at all, so a document with no repeated values
+pays nothing. The first would tax every text node, including the unique ones, to fund a
+feature they never use.
+
+### The threshold
+
+`(k−1)(L−1)` is positive from `L = 2`, exactly zero at `L = 1`, and **negative at `L = 0`** —
+a 2-byte empty literal would be replaced by a 3-byte reference. So the encoder references
+only values of 2 bytes or more.
+
+That threshold lives entirely in the encoder. **The decoder registers every `TEXT` literal it
+reads**, whether or not the encoder chose to reference it later, so ids stay in step without
+the decoder knowing the rule. Changing the threshold is therefore not a format change.
+
+### What it inherits
+
+Value interning is the name table pointed at a second dictionary, so it inherits all three
+of the same hazards:
+
+- **Reset between passes** — the measuring pass populates the value table; the emit pass must
+  start from empty or it will write references where literals were counted.
+- **Skip-safety** — a decoder that skips a subtree misses the value definitions inside it,
+  exactly as it would miss name definitions.
+- **Canonical encoding** — the rule is *always reference a value already seen*, so one
+  document has one encoding.
+
+### Hashing
+
+No cryptographic hash is needed, and no digest goes on the wire. A `Dictionary<string, int>`
+already resolves hash collisions by comparing the actual strings, so interning is correct by
+construction. Putting a SHA-256 digest on the wire instead would make a reference ~34 bytes
+framed, which only breaks even above about 33 bytes — against 3 bytes for an ordinal.
+
+The one case where a digest belongs on the wire is *cross-document* content addressing:
+referencing values the decoder received in an earlier, unrelated message. That is a
+different feature, and a stateful one.
 
 ## Worked example
 

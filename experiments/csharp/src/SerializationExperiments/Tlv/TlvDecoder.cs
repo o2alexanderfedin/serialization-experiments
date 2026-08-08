@@ -6,9 +6,11 @@ namespace SerializationExperiments.Tlv;
 /// Decodes a TLV document back into a <see cref="Node"/> tree.
 /// </summary>
 /// <remarks>
-/// Names are rebuilt from the byte stream alone: a literal defines the next id, and ids are
-/// consumed in the order literals appear. Nothing is shared with the encoder beyond the
-/// bytes, which is what lets a document carry tag names the decoder has never seen.
+/// Names and text values are rebuilt from the byte stream alone: a literal defines the next
+/// id, and ids are consumed in the order literals appear. Nothing is shared with the encoder
+/// beyond the bytes, which is what lets a document carry tag names the decoder has never
+/// seen. Every text literal is registered whether or not the encoder ever references it, so
+/// the decoder needs no knowledge of the encoder's threshold for what is worth interning.
 /// </remarks>
 public static class TlvDecoder
 {
@@ -22,8 +24,8 @@ public static class TlvDecoder
     public static Node Decode(ReadOnlySpan<byte> data)
     {
         int offset = 0;
-        List<string> names = [];
-        Node root = DecodeNode(data, ref offset, names, depth: 0);
+        var tables = new Tables();
+        Node root = DecodeNode(data, ref offset, tables, depth: 0);
 
         if (offset != data.Length)
         {
@@ -34,7 +36,7 @@ public static class TlvDecoder
         return root;
     }
 
-    private static Node DecodeNode(ReadOnlySpan<byte> data, ref int offset, List<string> names, int depth)
+    private static Node DecodeNode(ReadOnlySpan<byte> data, ref int offset, Tables tables, int depth)
     {
         if (depth > MaxDepth)
         {
@@ -62,10 +64,31 @@ public static class TlvDecoder
             case TlvType.Text:
                 string value = Encoding.UTF8.GetString(data[offset..end]);
                 offset = end;
+
+                // Every literal is registered, so ids stay in step with the encoder. Whether
+                // a repeat was worth referencing is the encoder's decision alone.
+                tables.Values.Add(value);
                 return new TextNode(value);
 
+            case TlvType.TextRef:
+                ulong valueId = Varint.Read(data, ref offset);
+                if (valueId >= (ulong)tables.Values.Count)
+                {
+                    throw new TlvFormatException(
+                        $"Value reference {valueId} at offset {offset} is not defined; {tables.Values.Count} value(s) known.");
+                }
+
+                if (offset != end)
+                {
+                    throw new TlvFormatException(
+                        $"Value reference frame ending at {offset} does not fill its length, which ends at {end}.");
+                }
+
+                // The existing instance: a reference costs no UTF-8 decode and no allocation.
+                return new TextNode(tables.Values[(int)valueId]);
+
             case TlvType.Element:
-                return DecodeElement(data, ref offset, end, names, depth);
+                return DecodeElement(data, ref offset, end, tables, depth);
 
             default:
                 throw new TlvFormatException(
@@ -77,7 +100,7 @@ public static class TlvDecoder
         ReadOnlySpan<byte> data,
         ref int offset,
         int end,
-        List<string> names,
+        Tables tables,
         int depth)
     {
         ulong nameRef = Varint.Read(data, ref offset);
@@ -96,24 +119,24 @@ public static class TlvDecoder
             offset += (int)nameLength;
 
             // Registered before children are read, mirroring the encoder's pre-order assignment.
-            names.Add(name);
+            tables.Names.Add(name);
         }
         else
         {
             ulong id = nameRef - 1;
-            if (id >= (ulong)names.Count)
+            if (id >= (ulong)tables.Names.Count)
             {
                 throw new TlvFormatException(
-                    $"Name reference {id} at offset {offset} is not defined; {names.Count} name(s) known.");
+                    $"Name reference {id} at offset {offset} is not defined; {tables.Names.Count} name(s) known.");
             }
 
-            name = names[(int)id];
+            name = tables.Names[(int)id];
         }
 
         List<Node> children = [];
         while (offset < end)
         {
-            children.Add(DecodeNode(data, ref offset, names, depth + 1));
+            children.Add(DecodeNode(data, ref offset, tables, depth + 1));
         }
 
         if (offset != end)
@@ -122,5 +145,15 @@ public static class TlvDecoder
         }
 
         return new ElementNode(name, children);
+    }
+
+    /// <summary>
+    /// Interning state rebuilt from the byte stream alone; nothing is shared with the encoder.
+    /// </summary>
+    private sealed class Tables
+    {
+        internal List<string> Names { get; } = [];
+
+        internal List<string> Values { get; } = [];
     }
 }

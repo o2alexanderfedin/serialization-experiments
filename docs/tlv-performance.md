@@ -137,10 +137,79 @@ the decoder's side, so the open question is which way to resolve the asymmetry �
 encoder to match, raise the decoder limit, or make the limit a documented parameter of the
 format rather than an implementation detail.
 
+## Value interning — measured after the fact
+
+Text values are now interned like element names (`TEXT` literal assigns an id, `TEXT_REF`
+references it). Same machine, same ShortRun job, so the numbers above are the "before".
+
+**Caveat on the shapes:** only `text-heavy` repeats its values — all 1000 children share one
+identical 200-byte string, which is interning's theoretical best case. `repeated` and
+`unique` both have all-distinct values (`value0`…`value999`); `repeated` refers to repeated
+*names*. So these shapes bracket the extremes and none of them models a realistic middle,
+such as a small vocabulary of status codes.
+
+### Size
+
+```bash
+dotnet run -c Release --project bench/SerializationExperiments.Benchmarks -- sizes
+```
+
+| Shape | Size | XML bytes | TLV bytes | Ratio |
+|---|---:|---:|---:|---:|
+| repeated | 1000 | 20,903 | 12,904 | 61.7 % |
+| unique | 1000 | 28,687 | 21,792 | 76.0 % |
+| deep | 1000 | 20,790 | 12,889 | 62.0 % |
+| text-heavy | 1000 | 213,021 | 6,219 | **2.9 %** |
+
+`text-heavy` against `unique` is the whole story: 2.9 % when every value repeats, 76 % when
+none do and only name interning and dropped close-tags are working.
+
+### Encode — `EncodeToArray`, what a caller actually pays
+
+| Shape | Size | Time before | Time after | Alloc before | Alloc after |
+|---|---:|---:|---:|---:|---:|
+| deep | 1000 | 136.3 μs | 116.5 μs | 291.8 KB | 292.3 KB |
+| repeated | 1000 | 76.6 μs | 153.3 μs | 108.7 KB | 339.6 KB |
+| unique | 1000 | 165.0 μs | 232.1 μs | 411.1 KB | 610.8 KB |
+| text-heavy | 1000 | 215.3 μs | 223.0 μs | **997.2 KB** | **118.1 KB** |
+
+### Decode
+
+| Shape | Size | Time before | Time after | Alloc before | Alloc after |
+|---|---:|---:|---:|---:|---:|
+| repeated | 1000 | 63.8 μs | 73.7 μs | 196.1 KB | 212.3 KB |
+| unique | 1000 | 83.5 μs | 90.5 μs | 251.2 KB | 267.5 KB |
+| text-heavy | 1000 | 154.8 μs | **58.6 μs** | 571.1 KB | **157.6 KB** |
+
+### What this says
+
+**When values repeat, it is decisive.** `text-heavy` output falls to 2.9 % of the XML,
+encode allocation drops 88 % (997 → 118 KB, taking the Gen2 and LOH traffic from
+[finding 2](#finding-2--encodenode-ignores-the-size-it-just-computed) with it), and *decode
+gets 2.6× faster on 72 % less memory* — a reference needs no UTF-8 decode and no string
+allocation, so the decoder hands back the existing instance.
+
+**When values do not repeat, it costs.** `repeated`/1000 pays +100 % encode time and +212 %
+allocation to save zero bytes; `unique`/1000 pays +41 % and +49 %. The value table is
+populated for every distinct value in both passes, and each lookup hashes the string — the
+cost lands on all values while the benefit lands only on repeats.
+
+That is the trade in its plainest form: **interning taxes distinct values to subsidise
+repeated ones.** For documents that repeat values it is overwhelmingly worth it; for
+documents of entirely unique values it is pure overhead.
+
+Worth noting the encode-time regression is smaller than it looks in the `text-heavy` column
+(+38 % on `EncodeToCounter`, 111.9 → 154.9 μs) because hashing a 200-byte string per lookup
+is itself O(L). Short values hash cheaply; long ones do not.
+
+If the tax on distinct-value documents matters, the obvious lever is to intern only values
+the measuring pass sees more than once — it already walks the whole tree, so the frequency
+is available before the emit pass runs. That trades a second dictionary for the savings and
+has not been measured.
+
 ## Not yet measured
 
 - Two-pass against a buffer-and-copy encoder, which would quantify the memory win directly
   rather than inferring it.
 - Deflate chained onto the output, and its interaction with skipping.
-- Value interning.
 - Documents large enough for the size cache (one `long` per node) to matter.

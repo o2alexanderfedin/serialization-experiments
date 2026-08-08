@@ -14,14 +14,26 @@ namespace SerializationExperiments.Tlv;
 /// payload.
 /// </para>
 /// <para>
-/// Both passes assign name ids from an empty table, in first-occurrence document order.
-/// The measuring pass therefore is not pure arithmetic — whether an element costs a literal
-/// or a one-byte reference depends on the table — and the emit pass must start from a fresh
-/// table or it would write references where the measuring pass counted literals.
+/// Both passes intern element names and text values from empty tables, in first-occurrence
+/// document order. The measuring pass therefore is not pure arithmetic — whether a node
+/// costs a literal or a short reference depends on the tables — and the emit pass must
+/// start from fresh tables or it would write references where the measuring pass counted
+/// literals.
 /// </para>
 /// </remarks>
 public static class TlvEncoder
 {
+    /// <summary>
+    /// Shortest value worth referencing.
+    /// </summary>
+    /// <remarks>
+    /// Over k occurrences of an L-byte value the saving is (k-1)(L-1): strictly positive
+    /// from L=2, exactly zero at L=1, and negative at L=0 where a 2-byte empty literal
+    /// would be replaced by a 3-byte reference. The threshold lives only here — the decoder
+    /// registers every literal it sees, so it needs no knowledge of the rule.
+    /// </remarks>
+    private const int MinInternedValueLength = 2;
+
     /// <summary>Encodes <paramref name="root"/> to a new array.</summary>
     /// <param name="root">Tree to encode.</param>
     /// <returns>The encoded document.</returns>
@@ -49,14 +61,14 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(sink);
 
         List<long> sizes = [];
-        long expected = Measure(root, NewNameTable(), sizes);
+        long expected = Measure(root, new Tables(), sizes);
 
         long before = sink.BytesWritten;
         int cursor = 0;
 
-        // A fresh table: the emit pass must rediscover names in the same order the
+        // Fresh tables: the emit pass must rediscover names and values in the same order the
         // measuring pass did, or every length already counted would be wrong.
-        Emit(root, sink, sizes, ref cursor, NewNameTable());
+        Emit(root, sink, sizes, ref cursor, new Tables());
 
         long written = sink.BytesWritten - before;
         if (written != expected)
@@ -74,16 +86,14 @@ public static class TlvEncoder
     public static long Measure(Node root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        return Measure(root, NewNameTable(), []);
+        return Measure(root, new Tables(), []);
     }
-
-    private static Dictionary<string, int> NewNameTable() => new(StringComparer.Ordinal);
 
     /// <summary>
     /// Pass 1. Records each node's value length into <paramref name="sizes"/> in pre-order and
     /// returns the node's total frame size.
     /// </summary>
-    private static long Measure(Node node, Dictionary<string, int> names, List<long> sizes)
+    private static long Measure(Node node, Tables tables, List<long> sizes)
     {
         int index = sizes.Count;
         sizes.Add(0);
@@ -92,14 +102,27 @@ public static class TlvEncoder
         switch (node)
         {
             case TextNode text:
-                valueLength = Encoding.UTF8.GetByteCount(text.Value);
+                if (tables.Values.TryGetValue(text.Value, out InternedValue seen) && seen.WorthReferencing)
+                {
+                    valueLength = Varint.Size((ulong)seen.Id);
+                }
+                else
+                {
+                    int textBytes = Encoding.UTF8.GetByteCount(text.Value);
+                    valueLength = textBytes;
+
+                    // Registered whether or not it is worth referencing, so ids stay in step
+                    // with the decoder, which registers every literal it reads.
+                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, textBytes));
+                }
+
                 break;
 
             case ElementNode element:
                 long head;
-                if (names.TryGetValue(element.Name, out int id))
+                if (tables.Names.TryGetValue(element.Name, out int nameId))
                 {
-                    head = Varint.Size((ulong)id + 1);
+                    head = Varint.Size((ulong)nameId + 1);
                 }
                 else
                 {
@@ -108,13 +131,13 @@ public static class TlvEncoder
 
                     // Claimed before descending, so ids follow document order, not the order
                     // subtrees happen to finish in.
-                    names.Add(element.Name, names.Count);
+                    tables.Names.Add(element.Name, tables.Names.Count);
                 }
 
                 long children = 0;
                 foreach (Node child in element.Children)
                 {
-                    children += Measure(child, names, sizes);
+                    children += Measure(child, tables, sizes);
                 }
 
                 valueLength = head + children;
@@ -129,7 +152,7 @@ public static class TlvEncoder
     }
 
     /// <summary>
-    /// Pass 2. Walks in the same order as <see cref="Measure(Node, Dictionary{string, int}, List{long})"/>,
+    /// Pass 2. Walks in the same order as <see cref="Measure(Node, Tables, List{long})"/>,
     /// so <paramref name="cursor"/> indexes the matching cached size.
     /// </summary>
     private static void Emit(
@@ -137,25 +160,37 @@ public static class TlvEncoder
         IByteSink sink,
         List<long> sizes,
         ref int cursor,
-        Dictionary<string, int> names)
+        Tables tables)
     {
         long valueLength = sizes[cursor++];
 
         switch (node)
         {
             case TextNode text:
-                sink.Write([TlvType.Text]);
-                Varint.Write((ulong)valueLength, sink);
-                sink.Write(Encoding.UTF8.GetBytes(text.Value));
+                if (tables.Values.TryGetValue(text.Value, out InternedValue seen) && seen.WorthReferencing)
+                {
+                    sink.Write([TlvType.TextRef]);
+                    Varint.Write((ulong)valueLength, sink);
+                    Varint.Write((ulong)seen.Id, sink);
+                }
+                else
+                {
+                    byte[] textBytes = Encoding.UTF8.GetBytes(text.Value);
+                    sink.Write([TlvType.Text]);
+                    Varint.Write((ulong)valueLength, sink);
+                    sink.Write(textBytes);
+                    tables.Values.TryAdd(text.Value, new InternedValue(tables.Values.Count, textBytes.Length));
+                }
+
                 break;
 
             case ElementNode element:
                 sink.Write([TlvType.Element]);
                 Varint.Write((ulong)valueLength, sink);
 
-                if (names.TryGetValue(element.Name, out int id))
+                if (tables.Names.TryGetValue(element.Name, out int nameId))
                 {
-                    Varint.Write((ulong)id + 1, sink);
+                    Varint.Write((ulong)nameId + 1, sink);
                 }
                 else
                 {
@@ -165,12 +200,12 @@ public static class TlvEncoder
                     sink.Write(nameBytes);
 
                     // Registered before descending, matching the measuring pass exactly.
-                    names.Add(element.Name, names.Count);
+                    tables.Names.Add(element.Name, tables.Names.Count);
                 }
 
                 foreach (Node child in element.Children)
                 {
-                    Emit(child, sink, sizes, ref cursor, names);
+                    Emit(child, sink, sizes, ref cursor, tables);
                 }
 
                 break;
@@ -178,5 +213,25 @@ public static class TlvEncoder
             default:
                 throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node));
         }
+    }
+
+    /// <summary>
+    /// The interning state both passes build independently, from empty.
+    /// </summary>
+    private sealed class Tables
+    {
+        internal Dictionary<string, int> Names { get; } = new(StringComparer.Ordinal);
+
+        internal Dictionary<string, InternedValue> Values { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A registered text value: its id, and whether referencing it actually saves bytes.
+    /// </summary>
+    /// <param name="Id">Value id, assigned in first-occurrence document order.</param>
+    /// <param name="ByteCount">UTF-8 length, cached so neither pass recomputes it.</param>
+    private readonly record struct InternedValue(int Id, int ByteCount)
+    {
+        internal bool WorthReferencing => this.ByteCount >= MinInternedValueLength;
     }
 }
