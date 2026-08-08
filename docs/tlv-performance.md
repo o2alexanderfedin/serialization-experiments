@@ -44,6 +44,7 @@ Document shapes, each 100 and 1000 elements:
 | `text-heavy` | repeated names with one identical 200-character value — interning's best case |
 | `values-repeat` | values drawn from a 10-word vocabulary — the realistic enum-like case |
 | `values-unique` | identical to `values-repeat` but every value distinct — the control |
+| `values-mixed` | 800 distinct values then 200 from a 4-word vocabulary — a vocabulary discovered late |
 
 `values-repeat` and `values-unique` are a matched pair: same element name, same child count,
 same 10-character value length, so their XML is byte-for-byte the same size. The only
