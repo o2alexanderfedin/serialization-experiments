@@ -14,9 +14,6 @@ namespace SerializationExperiments.Tlv;
 /// </remarks>
 public static class TlvDecoder
 {
-    /// <summary>Guards against stack exhaustion from a maliciously deep document.</summary>
-    private const int MaxDepth = 512;
-
     /// <summary>Decodes a complete document.</summary>
     /// <param name="data">Encoded document; must be consumed exactly.</param>
     /// <param name="options">
@@ -42,9 +39,9 @@ public static class TlvDecoder
 
     private static Node DecodeNode(ReadOnlySpan<byte> data, ref int offset, Tables tables, int depth)
     {
-        if (depth > MaxDepth)
+        if (depth > TlvLimits.MaxDepth)
         {
-            throw new TlvFormatException($"Nesting deeper than {MaxDepth} at offset {offset}.");
+            throw new TlvFormatException($"Nesting deeper than {TlvLimits.MaxDepth} at offset {offset}.");
         }
 
         if (offset >= data.Length)

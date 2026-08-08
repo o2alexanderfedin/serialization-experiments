@@ -11,15 +11,29 @@ internal static class Documents
     internal static readonly string[] Shapes =
         ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique"];
 
+    /// <summary>
+    /// Note for reports whose <c>deep</c> rows were clamped by the format's depth limit.
+    /// </summary>
+    internal static string DepthCap =>
+        $"deep is clamped to the format limit of {TlvLimits.MaxDepth} frames, " +
+        $"so its 1,000 row measures {TlvLimits.MaxDepth}.";
+
     /// <summary>Builds a shape by name, so every harness measures the same documents.</summary>
     /// <param name="shape">One of <see cref="Shapes"/>.</param>
     /// <param name="count">Element count, or chain depth for <c>deep</c>.</param>
     /// <returns>The document tree.</returns>
+    /// <remarks>
+    /// <c>deep</c> is clamped to <see cref="TlvLimits.MaxDepth"/>, so its 1,000 row measures
+    /// 512 frames. Anything deeper is not a legal document — the encoder refuses it and no
+    /// decoder would accept it — so measuring it would time something the codec never
+    /// produces. <see cref="DepthCap"/> exists so reports can say this rather than imply the
+    /// requested depth was used.
+    /// </remarks>
     internal static Node Build(string shape, int count) => shape switch
     {
         "repeated" => RepeatedNames(count),
         "unique" => UniqueNames(count),
-        "deep" => Deep(count),
+        "deep" => Deep(Math.Min(count, TlvLimits.MaxDepth)),
         "text-heavy" => TextHeavy(count, textLength: 200),
         "values-repeat" => ValuesRepeat(count),
         "values-unique" => ValuesUnique(count),

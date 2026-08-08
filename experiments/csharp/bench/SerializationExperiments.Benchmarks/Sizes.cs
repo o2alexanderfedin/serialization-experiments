@@ -31,6 +31,9 @@ internal static class Sizes
                 $"| {shape} | {count} | {xml:N0} | {tlv:N0} | {(double)tlv / xml:P1} |"));
             }
         }
+
+        Console.WriteLine();
+        Console.WriteLine(Documents.DepthCap);
     }
 
     private static string RenderXml(Node node)

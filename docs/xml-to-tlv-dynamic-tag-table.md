@@ -241,6 +241,25 @@ immutable records — and back-references enable amplification, where a small do
 referencing one large subtree repeatedly explodes on decode. Cap'n Proto's traversal limit
 exists for that; a depth cap alone would not catch it.
 
+### Nesting depth
+
+Frame nesting is capped at **512 levels beneath the root**, and the cap is part of the
+format rather than of either codec.
+
+Both sides recurse once per frame, and a `StackOverflowException` cannot be caught — it
+ends the process. The decoder therefore has to bound depth, because it reads bytes it did
+not produce. The encoder enforces the identical bound, checked during the measuring pass so
+that a rejected tree leaves the sink untouched rather than half-written.
+
+Enforcing it on only one side is worse than not enforcing it at all: an unbounded encoder
+produces documents its own decoder refuses, and the failure surfaces at the far end of the
+wire rather than at the point the tree was built. That asymmetry existed here and was found
+by a benchmark, not by a test — the depth-1000 row reported NA where every other row
+reported a time.
+
+The limit is not a defence against amplification. A shallow document can still reference one
+large subtree repeatedly; bounding that needs a traversal budget, as noted above.
+
 ### Hashing
 
 No cryptographic hash is needed, and no digest goes on the wire. A `Dictionary<string, int>`

@@ -49,6 +49,9 @@ internal static class Allocations
                     $"| {shape} | {count} | {output:N0} | {measure:N0} | {counter:N0} | {array:N0} | {overhead:N2}x |"));
             }
         }
+
+        Console.WriteLine();
+        Console.WriteLine(Documents.DepthCap);
     }
 
     /// <summary>Bytes allocated by one run of <paramref name="action"/>, after warmup.</summary>

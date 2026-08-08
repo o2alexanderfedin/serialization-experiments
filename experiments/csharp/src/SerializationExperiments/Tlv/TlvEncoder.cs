@@ -62,7 +62,7 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(root);
 
         List<long> sizes = [];
-        long total = Measure(root, new Tables(), sizes);
+        long total = Measure(root, new Tables(), sizes, depth: 0);
 
         if (total > Array.MaxLength)
         {
@@ -91,7 +91,7 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(sink);
 
         List<long> sizes = [];
-        long expected = Measure(root, new Tables(), sizes);
+        long expected = Measure(root, new Tables(), sizes, depth: 0);
         return EmitMeasured(root, sink, sizes, expected);
     }
 
@@ -120,18 +120,30 @@ public static class TlvEncoder
     /// <summary>Computes the encoded size of <paramref name="root"/> without producing bytes.</summary>
     /// <param name="root">Tree to measure.</param>
     /// <returns>Total frame size in bytes, header included.</returns>
+    /// <exception cref="ArgumentException">
+    /// The tree nests deeper than <see cref="TlvLimits.MaxDepth"/>.
+    /// </exception>
     public static long Measure(Node root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        return Measure(root, new Tables(), []);
+        return Measure(root, new Tables(), [], depth: 0);
     }
 
     /// <summary>
     /// Pass 1. Records each node's value length into <paramref name="sizes"/> in pre-order and
     /// returns the node's total frame size.
     /// </summary>
-    private static long Measure(Node node, Tables tables, List<long> sizes)
+    private static long Measure(Node node, Tables tables, List<long> sizes, int depth)
     {
+        // Checked here rather than in the emit pass so a too-deep tree is rejected before any
+        // byte reaches the sink, and so this pass cannot itself overflow the stack.
+        if (depth > TlvLimits.MaxDepth)
+        {
+            throw new ArgumentException(
+                $"Tree nests deeper than {TlvLimits.MaxDepth}, which no decoder will accept.",
+                nameof(node));
+        }
+
         int index = sizes.Count;
         sizes.Add(0);
 
@@ -174,7 +186,7 @@ public static class TlvEncoder
                 long children = 0;
                 foreach (Node child in element.Children)
                 {
-                    children += Measure(child, tables, sizes);
+                    children += Measure(child, tables, sizes, depth + 1);
                 }
 
                 valueLength = head + children;
