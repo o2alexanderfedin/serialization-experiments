@@ -37,4 +37,28 @@ public sealed record TlvDecoderOptions
     /// </para>
     /// </remarks>
     public bool ShareValueInstances { get; init; } = true;
+
+    /// <summary>
+    /// Whether type-tagged frames are accepted at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see langword="true"/> (default) decodes a tagged frame to a
+    /// <see cref="TypedNode"/> carrying the name as text. That is the whole of it — the
+    /// decoder does not resolve the name, so accepting one costs nothing but a wrapper node,
+    /// and an unrecognised name re-encodes unchanged instead of failing. Erroring on names
+    /// it does not know would ossify the format: every new derived type would break every
+    /// existing reader.
+    /// </para>
+    /// <para>
+    /// <see langword="false"/> rejects them outright, for callers who want the guarantee that
+    /// a document contains only elements and text — a peer that has no notion of types
+    /// should be able to say so rather than silently accept frames it will never look at.
+    /// </para>
+    /// <para>
+    /// Note what neither setting does: turn a name into a <see cref="System.Type"/>. Mapping
+    /// names to types is the caller's, in caller code, against a list the caller wrote.
+    /// </para>
+    /// </remarks>
+    public bool AllowTypeNames { get; init; } = true;
 }

@@ -17,6 +17,8 @@ internal static class Xml
 
     internal static TextNode Text(string value) => new(value);
 
+    internal static TypedNode Typed(string typeName, Node inner) => new(typeName, inner);
+
     /// <summary>Renders a tree to XML text, so two trees can be compared by content.</summary>
     internal static string Render(Node node)
     {
@@ -31,6 +33,15 @@ internal static class Xml
         {
             case TextNode text:
                 builder.Append(text.Value);
+                break;
+
+            case TypedNode typed:
+                // Deliberately not element syntax: a TypedNode named "x" must not render the
+                // same as an ElementNode named "x", or the round-trip check would not notice
+                // one turning into the other.
+                builder.Append('{').Append(typed.TypeName).Append(':');
+                Render(typed.Inner, builder);
+                builder.Append('}');
                 break;
 
             case ElementNode element:

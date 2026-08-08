@@ -41,7 +41,8 @@ Little-endian varints (LEB128), 1-byte types.
 | `0x02` | `TEXT` | primitive | UTF-8 bytes; assigns the next value id |
 | `0x03` | `TEXT_REF` | primitive | varint id of a value defined by an earlier `TEXT` |
 | `0x04` | `TEXT_ONCE` | primitive | UTF-8 bytes; assigns **no** value id |
-| `0x00`, `0x05`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
+| `0x05` | `TYPED` | constructed | TypeRef, optional literal, then exactly one child frame |
+| `0x00`, `0x06`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
 
 ### `ELEMENT` value
 
@@ -69,6 +70,18 @@ step with the encoder's.
 | Order | Field | Size | Notes |
 |---|---|---|---|
 | 1 | `ValueId` | 1–5 B | varint id of a value defined by an earlier `TEXT` frame |
+
+### `TYPED` value
+
+| Order | Field | Size | Present when | Notes |
+|---|---|---|---|---|
+| 1 | `TypeRef` | 1–5 B | always | `0` = literal follows; `n>0` = type id `n-1` |
+| 2 | `TypeLen` | 1–5 B | `TypeRef == 0` | Byte count of `TypeName` |
+| 3 | `TypeName` | `TypeLen` B | `TypeRef == 0` | UTF-8, no terminator. Assigns the next **type** id |
+| 4 | `Child` | rest | always | Exactly one complete frame, filling `Length` exactly |
+
+Exactly one child, not zero or many — a type tags a single thing. A frame that does not end
+where its one child ends is malformed.
 
 ### `NameRef`
 
@@ -292,6 +305,79 @@ reported a time.
 
 The limit is not a defence against amplification. A shallow document can still reference one
 large subtree repeatedly; bounding that needs a traversal budget, as noted above.
+
+## Polymorphic types
+
+A `TYPED` frame tags exactly one frame with a **type name**, so a value whose static type is
+a base class can say which derived type it actually was.
+
+It is opt-in by construction. A document that carries no type names is byte-for-byte what it
+was before this frame existed: `TYPED` is its own type code rather than a field on
+`ELEMENT`, and type names are interned in a **third id space** of their own, so adding one
+shifts no element-name id and no value id. The same argument that made `TEXT_REF` a separate
+type applies again — nothing should pay for a feature it does not use.
+
+Type names intern exactly like element names: `TypeRef = 0` means a literal follows and
+claims the next type id, `n > 0` means type id `n − 1`.
+
+| | Bytes per polymorphic value |
+|---|---|
+| This format, first use of a name | `3 + N` |
+| This format, thereafter | **3** |
+| `System.Text.Json` `$type` | `~12 + N`, every value |
+| Protobuf `Any` | type URL, every value |
+| CBOR tag 27 + name | `2 + N`, or ~5 amortised under `stringref` |
+
+### The decoder never resolves a name
+
+Decoding a `TYPED` frame produces a node carrying the type name **as text**. That is all.
+No lookup, no assembly load, no construction. Mapping a name to a type is the caller's job,
+in caller code, against a table the caller wrote.
+
+This is the single most important decision here, and it is not a matter of taste:
+
+- `BinaryFormatter` embedded assembly-qualified type names and resolved them. It was
+  **removed from .NET 9** because that is a gadget-chain primitive.
+- Avro's Java SDK shipped **three** successive versions of one allow-list. The first checked
+  the list *after* loading the class, so static initialisers had already run; the second
+  still trusted whole namespaces like `java.lang`; and a second call path — resolving the
+  writer's schema fullname — was never covered by the fix at all.
+- MessagePack-CSharp's allow-list did not recurse into generic type arguments.
+
+Three independent codebases, three different ways to be wrong, each shipped believing the
+list was right. A decoder that cannot name a type cannot be argued into instantiating one,
+and that is a cheaper guarantee than a correct allow-list.
+
+### An unknown type is preserved, not rejected
+
+A reader that has never heard of a type name still round-trips the document byte-for-byte:
+the name survives decoding as text and re-encodes unchanged. Adding a derived type therefore
+does not break existing readers.
+
+This is only possible because frames are length-prefixed. Avro's unions carry a branch index
+with no length, so an unrecognised branch is not merely unknown, it is **unreadable** — the
+reader cannot advance past a value it cannot decode. RFC 8949 §5.4 makes the same point for
+CBOR from the other direction: erroring on an unknown tag *"can cause ossification and is
+thus not encouraged."* `System.Text.Json` fails on an unrecognised `$type`, or drops it.
+
+Callers who want the stricter behaviour can have it: `TlvDecoderOptions.AllowTypeNames`
+rejects `TYPED` frames outright, for a peer that should only ever see elements and text.
+
+### What this costs the format
+
+Worth stating plainly, because it is a third order-dependent table.
+
+RFC 8949 §3.4 says that tags requiring processing "at (de-)serialization time" — CBOR's own
+`stringref` (25) and `sharable` (29), the very precedents cited above for value interning —
+*"cannot be implemented on top of an arbitrary generic CBOR encoder/decoder"*, and that
+defining new ones is **NOT RECOMMENDED**.
+
+That warning is about extending a general-purpose format, and it does not transfer directly:
+this codec owns its tables from the start rather than bolting them onto a generic reader.
+But the consequence does transfer. There is no generic TLV reader that can handle these
+frames without knowing the interning rules, and a third table deepens that commitment. It is
+the same trade already accepted for names and values — worth naming as a deliberate third
+acceptance rather than sliding into it.
 
 ### Hashing
 

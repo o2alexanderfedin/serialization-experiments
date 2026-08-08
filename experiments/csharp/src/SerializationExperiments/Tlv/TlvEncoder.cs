@@ -144,8 +144,11 @@ public static class TlvEncoder
     /// </summary>
     private static long Measure(Node node, Tables tables, List<long> sizes, int depth)
     {
-        // Checked here rather than in the emit pass so a too-deep tree is rejected before any
-        // byte reaches the sink, and so this pass cannot itself overflow the stack.
+        // A backstop, not the primary check: CountValues walks the same tree with the same
+        // accounting and runs first, so in practice it reports a too-deep tree before this
+        // pass recurses at all. Mutation testing confirms as much — removing this guard alone
+        // fails nothing. It stays because it is what keeps *this* recursion bounded, and the
+        // guarantee should not depend on the order two private passes happen to run in.
         if (depth > TlvLimits.MaxDepth)
         {
             throw new ArgumentException(
@@ -179,6 +182,25 @@ public static class TlvEncoder
                     }
                 }
 
+                break;
+
+            case TypedNode typed:
+                long typeHead;
+                if (tables.TypeNames.TryGetValue(typed.TypeName, out int typeId))
+                {
+                    typeHead = Varint.Size((ulong)typeId + 1);
+                }
+                else
+                {
+                    int typeBytes = Encoding.UTF8.GetByteCount(typed.TypeName);
+                    typeHead = Varint.Size(0) + Varint.Size((ulong)typeBytes) + typeBytes;
+
+                    // Claimed before descending, like element names, so ids follow document
+                    // order. The table is its own: a type name never shifts a name or value id.
+                    tables.TypeNames.Add(typed.TypeName, tables.TypeNames.Count);
+                }
+
+                valueLength = typeHead + Measure(typed.Inner, tables, sizes, depth + 1);
                 break;
 
             case ElementNode element:
@@ -255,6 +277,26 @@ public static class TlvEncoder
                     }
                 }
 
+                break;
+
+            case TypedNode typed:
+                sink.Write([TlvType.Typed]);
+                Varint.Write((ulong)valueLength, sink);
+
+                if (tables.TypeNames.TryGetValue(typed.TypeName, out int typeId))
+                {
+                    Varint.Write((ulong)typeId + 1, sink);
+                }
+                else
+                {
+                    int typeBytes = Encoding.UTF8.GetByteCount(typed.TypeName);
+                    Varint.Write(0, sink);
+                    Varint.Write((ulong)typeBytes, sink);
+                    WriteUtf8(typed.TypeName, typeBytes, sink);
+                    tables.TypeNames.Add(typed.TypeName, tables.TypeNames.Count);
+                }
+
+                Emit(typed.Inner, sink, sizes, ref cursor, tables);
                 break;
 
             case ElementNode element:
@@ -352,6 +394,10 @@ public static class TlvEncoder
                 counts[text.Value] = counts.GetValueOrDefault(text.Value) + 1;
                 break;
 
+            case TypedNode typed:
+                CountValues(typed.Inner, counts, depth + 1);
+                break;
+
             case ElementNode element:
                 for (int child = 0; child < element.Children.Count; child++)
                 {
@@ -375,6 +421,11 @@ public static class TlvEncoder
     private sealed class Tables(Dictionary<string, int> occurrences)
     {
         internal Dictionary<string, int> Names { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Type names, in their own id space so they shift nothing else.
+        /// </summary>
+        internal Dictionary<string, int> TypeNames { get; } = new(StringComparer.Ordinal);
 
         /// <summary>Values that claimed an id, in first-occurrence document order.</summary>
         internal Dictionary<string, int> ValueIds { get; } = new(StringComparer.Ordinal);

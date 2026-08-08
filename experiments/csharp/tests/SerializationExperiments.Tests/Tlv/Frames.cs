@@ -53,6 +53,7 @@ internal static class Frames
                 break;
 
             case TlvType.Element:
+            case TlvType.Typed:
                 frames.Add(new Frame(type, 0, 0));
                 ulong nameRef = ReadVarint(data, ref offset);
                 if (nameRef == 0)

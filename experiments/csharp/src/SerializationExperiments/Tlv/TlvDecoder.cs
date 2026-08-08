@@ -105,10 +105,77 @@ public static class TlvDecoder
             case TlvType.Element:
                 return DecodeElement(data, ref offset, end, tables, depth);
 
+            case TlvType.Typed:
+                return DecodeTyped(data, ref offset, end, tables, depth);
+
             default:
                 throw new TlvFormatException(
                     $"Unknown type 0x{type:X2} at offset {offset - 1 - Varint.Size(length)}.");
         }
+    }
+
+    /// <summary>
+    /// Reads a type-tagged frame into a <see cref="TypedNode"/>.
+    /// </summary>
+    /// <remarks>
+    /// The type name is returned as text and nothing else happens to it. No lookup, no
+    /// assembly load, no construction: a name the caller does not recognise costs them a
+    /// branch, not a gadget chain. Because the frame is length-prefixed, an unrecognised name
+    /// can also simply be re-encoded unchanged, which is what keeps adding a derived type
+    /// from breaking existing readers.
+    /// </remarks>
+    private static TypedNode DecodeTyped(
+        ReadOnlySpan<byte> data,
+        ref int offset,
+        int end,
+        Tables tables,
+        int depth)
+    {
+        if (!tables.Options.AllowTypeNames)
+        {
+            throw new TlvFormatException(
+                $"Type-tagged frame at offset {offset} rejected: type names are not allowed by this decoder.");
+        }
+
+        ulong typeRef = Varint.Read(data, ref offset);
+        string typeName;
+
+        if (typeRef == 0)
+        {
+            ulong nameLength = Varint.Read(data, ref offset);
+            if (nameLength > (ulong)(end - offset))
+            {
+                throw new TlvFormatException(
+                    $"Type name at offset {offset} declares {nameLength} bytes, past the end of its frame.");
+            }
+
+            typeName = Encoding.UTF8.GetString(data.Slice(offset, (int)nameLength));
+            offset += (int)nameLength;
+
+            // Registered before descending, mirroring the encoder's pre-order assignment.
+            tables.TypeNames.Add(typeName);
+        }
+        else
+        {
+            ulong id = typeRef - 1;
+            if (id >= (ulong)tables.TypeNames.Count)
+            {
+                throw new TlvFormatException(
+                    $"Type reference {id} at offset {offset} is not defined; {tables.TypeNames.Count} type name(s) known.");
+            }
+
+            typeName = tables.TypeNames[(int)id];
+        }
+
+        Node inner = DecodeNode(data, ref offset, tables, depth + 1);
+
+        if (offset != end)
+        {
+            throw new TlvFormatException(
+                $"Type-tagged frame ending at {offset} does not fill its length, which ends at {end}.");
+        }
+
+        return new TypedNode(typeName, inner);
     }
 
     private static ElementNode DecodeElement(
@@ -170,6 +237,8 @@ public static class TlvDecoder
         internal TlvDecoderOptions Options { get; } = options;
 
         internal List<string> Names { get; } = [];
+
+        internal List<string> TypeNames { get; } = [];
 
         internal List<string> Values { get; } = [];
     }

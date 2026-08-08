@@ -38,6 +38,17 @@ internal static class TlvType
     /// </remarks>
     internal const byte TextOnce = 0x04;
 
+    /// <summary>
+    /// Constructed: a type-name reference, an optional literal, then exactly one child frame.
+    /// </summary>
+    /// <remarks>
+    /// A separate frame rather than a field on <see cref="Element"/>, for the same reason
+    /// <see cref="TextRef"/> is separate: a document that carries no type names pays nothing
+    /// for the ones it does not use. Type names are interned in their own id space, so
+    /// adding them shifts no element-name or value id.
+    /// </remarks>
+    internal const byte Typed = 0x05;
+
     /// <summary>Deliberately unused, so a zero byte is never a valid Type.</summary>
     internal const byte Reserved = 0x00;
 }
