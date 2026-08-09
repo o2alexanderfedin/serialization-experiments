@@ -370,6 +370,10 @@ public sealed class PrimitiveTypeTests
         byte[] structural =
         [
             TlvType.Element, TlvType.Text, TlvType.TextRef, TlvType.TextOnce, TlvType.Typed,
+
+            // INTERN wraps a value rather than being one; it never reaches a PrimitiveNode,
+            // because the decoder unwraps it and returns the primitive inside.
+            TlvType.Intern,
         ];
 
         for (int candidate = 0; candidate <= byte.MaxValue; candidate++)

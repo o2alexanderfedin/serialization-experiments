@@ -10,7 +10,7 @@ internal static class Documents
 {
     /// <summary>Shape names, in the order they should appear in a report.</summary>
     internal static readonly string[] Shapes =
-        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed", "records", "records-text"];
+        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed", "records", "records-text", "identifiers"];
 
     /// <summary>
     /// Note for reports whose <c>deep</c> rows were clamped by the format's depth limit.
@@ -42,6 +42,7 @@ internal static class Documents
         "typed" => Typed(count),
         "records" => Records(count, typedValues: true),
         "records-text" => Records(count, typedValues: false),
+        "identifiers" => Identifiers(count),
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown document shape."),
     };
 
@@ -127,6 +128,40 @@ internal static class Documents
         }
 
         return new ElementNode("feed", children);
+    }
+
+    /// <summary>
+    /// Identifiers drawn from a small pool — a foreign key, a tenant id, a correlation id.
+    /// </summary>
+    /// <remarks>
+    /// Added because no other shape had one. Every existing shape either repeats *text* or
+    /// carries primitives that are all distinct, so none of them exercised a repeated wide
+    /// primitive — and that turned out to be the case where the format's headline feature was
+    /// actively harmful, a repeated <c>Guid</c> costing 20 bytes typed against 6 as interned
+    /// text. A corpus that cannot show a regression cannot catch one.
+    /// </remarks>
+    internal static Node Identifiers(int count, int poolSize = 10)
+    {
+        Guid[] pool = new Guid[poolSize];
+        for (int index = 0; index < poolSize; index++)
+        {
+            byte[] bytes = new byte[16];
+            BitConverter.TryWriteBytes(bytes, index);
+            pool[index] = new Guid(bytes);
+        }
+
+        Node[] children = new Node[count];
+        for (int index = 0; index < count; index++)
+        {
+            children[index] = new ElementNode(
+                "row",
+                [
+                    new ElementNode("tenant", [Primitives.Guid(pool[index % poolSize])]),
+                    new ElementNode("seq", [Primitives.Int(index)]),
+                ]);
+        }
+
+        return new ElementNode("audit", children);
     }
 
     /// <summary>

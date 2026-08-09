@@ -79,8 +79,9 @@ public static class TlvDecoder
                 // The type code says this literal claims the next id. Why the encoder
                 // decided that — how often the value recurs, how long it is — is the
                 // encoder's business, and can change without touching this side.
-                tables.Values.Add(value);
-                return new TextNode(value);
+                var textNode = new TextNode(value);
+                tables.Values.Add(textNode);
+                return textNode;
 
             case TlvType.TextOnce:
                 string once = Encoding.UTF8.GetString(data[offset..end]);
@@ -104,13 +105,25 @@ public static class TlvDecoder
                         $"Value reference frame ending at {offset} does not fill its length, which ends at {end}.");
                 }
 
-                string referenced = tables.Values[(int)valueId];
-
                 // Sharing the instance costs no UTF-8 decode and no allocation, and is
-                // unobservable for immutable strings. Callers whose object model attaches
+                // unobservable for immutable values. Callers whose object model attaches
                 // meaning to reference identity can opt out.
-                return new TextNode(
-                    tables.Options.ShareValueInstances ? referenced : new string(referenced.AsSpan()));
+                Node referenced = tables.Values[(int)valueId];
+                if (tables.Options.ShareValueInstances)
+                {
+                    return referenced;
+                }
+
+                return referenced switch
+                {
+                    TextNode text => new TextNode(new string(text.Value.AsSpan())),
+                    PrimitiveNode primitive => new PrimitiveNode(
+                        primitive.Type, primitive.Payload.ToArray()),
+                    _ => referenced,
+                };
+
+            case TlvType.Intern:
+                return DecodeIntern(data, ref offset, end, tables, depth);
 
             case TlvType.Element:
                 return DecodeElement(data, ref offset, end, tables, depth);
@@ -314,6 +327,46 @@ public static class TlvDecoder
         return new TypedNode(typeName, inner);
     }
 
+    /// <summary>
+    /// Reads an <c>INTERN</c> frame: one value frame that claims the next value id.
+    /// </summary>
+    /// <remarks>
+    /// The wrapper carries no payload of its own — it decodes to the value it wraps, exactly
+    /// as a <c>TEXT</c> frame decodes to its text. Re-encoding stays byte-exact because the
+    /// encoder rederives which values are worth interning from occurrence counts, so it wraps
+    /// the same first occurrence again.
+    /// </remarks>
+    private static Node DecodeIntern(
+        ReadOnlySpan<byte> data,
+        ref int offset,
+        int end,
+        Tables tables,
+        int depth)
+    {
+        Node inner = DecodeNode(data, ref offset, tables, depth + 1);
+
+        if (offset != end)
+        {
+            throw new TlvFormatException(
+                $"Intern frame ending at {offset} does not fill its length, which ends at {end}.");
+        }
+
+        // Only a primitive may claim an id this way. Text has TEXT for the purpose and would
+        // register twice; a constructed frame has no single value to register; and an unknown
+        // frame must go back exactly as it arrived, which rewriting it as a reference is not.
+        // Admitting any of them would put the decoder's id list out of step with the
+        // encoder's, and this format has already been bitten once by references that resolve
+        // to the wrong value while every length still checks out.
+        if (inner is not PrimitiveNode)
+        {
+            throw new TlvFormatException(
+                $"Intern frame at offset {end} wraps a {inner.GetType().Name}; only a primitive may claim a value id.");
+        }
+
+        tables.Values.Add(inner);
+        return inner;
+    }
+
     private static ElementNode DecodeElement(
         ReadOnlySpan<byte> data,
         ref int offset,
@@ -376,6 +429,14 @@ public static class TlvDecoder
 
         internal List<string> TypeNames { get; } = [];
 
-        internal List<string> Values { get; } = [];
+        /// <summary>
+        /// Values that claimed an id, text and primitives alike, in the order their claiming
+        /// frames were read.
+        /// </summary>
+        /// <remarks>
+        /// One list, not two, because the encoder numbers from one counter. A separate list
+        /// per kind would agree with the encoder right up until a document mixed them.
+        /// </remarks>
+        internal List<Node> Values { get; } = [];
     }
 }

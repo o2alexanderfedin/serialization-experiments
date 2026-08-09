@@ -65,7 +65,29 @@ public sealed record TypedNode(string TypeName, Node Inner) : Node;
 /// byte-exact by construction rather than by care.
 /// </para>
 /// </remarks>
-public sealed record PrimitiveNode(byte Type, ReadOnlyMemory<byte> Payload) : Node;
+public sealed record PrimitiveNode(byte Type, ReadOnlyMemory<byte> Payload) : Node
+{
+    /// <summary>Compares the payload by content.</summary>
+    /// <param name="other">Node to compare with.</param>
+    /// <returns><see langword="true"/> if both hold the same bytes under the same type.</returns>
+    /// <remarks>
+    /// A record's generated equality would compare <see cref="ReadOnlyMemory{T}"/> by its
+    /// underlying object, offset and length, so two nodes holding identical bytes in separate
+    /// arrays would be unequal. Nothing here is a reference type to the caller — this is a
+    /// value — and the encoder relies on it to recognise a repeated primitive.
+    /// </remarks>
+    public bool Equals(PrimitiveNode? other) =>
+        other is not null && Type == other.Type && Payload.Span.SequenceEqual(other.Payload.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        HashCode hash = default;
+        hash.Add(Type);
+        hash.AddBytes(Payload.Span);
+        return hash.ToHashCode();
+    }
+}
 
 /// <summary>
 /// A frame whose shape was understood but whose type was not.
@@ -78,4 +100,21 @@ public sealed record PrimitiveNode(byte Type, ReadOnlyMemory<byte> Payload) : No
 /// <see cref="PrimitiveNode"/>: "I did not understand this" must not be silently mistaken
 /// for a value, and a <c>switch</c> that omits this case fails loudly.
 /// </remarks>
-public sealed record UnknownNode(byte Type, ReadOnlyMemory<byte> Payload) : Node;
+public sealed record UnknownNode(byte Type, ReadOnlyMemory<byte> Payload) : Node
+{
+    /// <summary>Compares the payload by content.</summary>
+    /// <param name="other">Node to compare with.</param>
+    /// <returns><see langword="true"/> if both hold the same bytes under the same type.</returns>
+    /// <remarks>Same reasoning as <see cref="PrimitiveNode.Equals(PrimitiveNode)"/>.</remarks>
+    public bool Equals(UnknownNode? other) =>
+        other is not null && Type == other.Type && Payload.Span.SequenceEqual(other.Payload.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        HashCode hash = default;
+        hash.Add(Type);
+        hash.AddBytes(Payload.Span);
+        return hash.ToHashCode();
+    }
+}
