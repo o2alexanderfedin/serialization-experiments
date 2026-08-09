@@ -35,6 +35,23 @@ Little-endian varints (LEB128), 1-byte types.
 
 ### Type registry
 
+The Type byte is two nibbles: the high one says **how to skip the frame**, the low one says
+**what it is**. A reader that has never heard of type `0x63` still knows it is shape `6`, so
+eight bytes of payload, so the next frame starts nine bytes along — which is what lets a
+document written against a later version of this format pass through unchanged.
+
+Only shape `0x0_` carries a Length. Every other shape is self-delimiting, which is why a
+`double` costs one byte of header rather than two.
+
+| Shape | Payload | How an unknown type is skipped |
+|---|---|---|
+| `0x0_` | varint length, then that many bytes | read the varint, skip that many |
+| `0x1_` | none | skip 0 |
+| `0x2_` | one canonical varint | read the varint |
+| `0x3_` … `0xA_` | 1, 2, 4, 8, 16, 32, 64, 128 bytes | skip that many |
+| `0xB_`–`0xE_` | **reserved** | cannot be skipped, so must be rejected |
+| `0xF_` | varint subtype, varint length, then that many bytes | read both, skip that many |
+
 | Value | Name | Kind | Value contains |
 |---|---|---|---|
 | `0x01` | `ELEMENT` | constructed | NameRef, optional literal, then child frames |
@@ -42,7 +59,29 @@ Little-endian varints (LEB128), 1-byte types.
 | `0x03` | `TEXT_REF` | primitive | varint id of a value defined by an earlier `TEXT` |
 | `0x04` | `TEXT_ONCE` | primitive | UTF-8 bytes; assigns **no** value id |
 | `0x05` | `TYPED` | constructed | TypeRef, optional literal, then exactly one child frame |
-| `0x00`, `0x06`–`0xFF` | — | reserved | `0x00` deliberately unused so a zero byte is never a valid Type |
+| `0x06` | `BYTES` | primitive | raw octets |
+| `0x10` | `NULL` | primitive | nothing |
+| `0x11` / `0x12` | `FALSE` / `TRUE` | primitive | nothing |
+| `0x20` | `UINT` | primitive | unsigned integer, canonical varint |
+| `0x21` | `SINT` | primitive | signed integer, ZigZag then canonical varint |
+| `0x52` | `F32` | primitive | IEEE 754 binary32, little-endian |
+| `0x62` | `F64` | primitive | IEEE 754 binary64, little-endian |
+| `0x70` | `GUID` | primitive | 16-byte UUID |
+| `0xF0` / `0xF1` | `EXT` / `EXT_PRIVATE` | primitive | subtype, length, then bytes |
+| `0x00` | — | reserved | deliberately unused, so a zero byte is never a valid Type |
+
+Further codes are allocated but not implemented — fixed-width integers, `F16`, `TIMESTAMP`,
+`DECIMAL`, `SHA256`, `SHA512`, `BIGINT`. See
+[primitive type codes](tlv-primitive-type-codes.md) for the full registry, the reasoning, and
+the safety invariants.
+
+**A type this reader does not know is carried through, not rejected.** The shape says how far
+the frame reaches, so it decodes to an opaque node and re-encodes to exactly the bytes it
+came from. Only three things are errors: `0x00`, the reserved shapes `0xB_`–`0xE_` whose width
+is unknowable, and a payload that runs past its parent or the buffer.
+
+The five codes that predate this split are all length-prefixed, so all five sit in shape
+`0x0_` and none of them moved. No document changed by a byte.
 
 ### `ELEMENT` value
 

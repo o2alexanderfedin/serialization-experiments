@@ -35,6 +35,16 @@ internal static class Xml
                 builder.Append(text.Value);
                 break;
 
+            case PrimitiveNode primitive:
+                builder.Append('#').Append(primitive.Type.ToString("X2")).Append(':')
+                       .Append(Convert.ToHexString(primitive.Payload.Span));
+                break;
+
+            case UnknownNode unknown:
+                builder.Append('?').Append(unknown.Type.ToString("X2")).Append(':')
+                       .Append(Convert.ToHexString(unknown.Payload.Span));
+                break;
+
             case TypedNode typed:
                 // Deliberately not element syntax: a TypedNode named "x" must not render the
                 // same as an ElementNode named "x", or the round-trip check would not notice

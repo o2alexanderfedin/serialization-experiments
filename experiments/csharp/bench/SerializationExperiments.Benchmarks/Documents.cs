@@ -1,3 +1,4 @@
+using System.Globalization;
 using SerializationExperiments.Tlv;
 
 namespace SerializationExperiments.Benchmarks;
@@ -9,7 +10,7 @@ internal static class Documents
 {
     /// <summary>Shape names, in the order they should appear in a report.</summary>
     internal static readonly string[] Shapes =
-        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed"];
+        ["repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed", "records", "records-text"];
 
     /// <summary>
     /// Note for reports whose <c>deep</c> rows were clamped by the format's depth limit.
@@ -39,6 +40,8 @@ internal static class Documents
         "values-unique" => ValuesUnique(count),
         "values-mixed" => ValuesMixed(count),
         "typed" => Typed(count),
+        "records" => Records(count, typedValues: true),
+        "records-text" => Records(count, typedValues: false),
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown document shape."),
     };
 
@@ -181,6 +184,45 @@ internal static class Documents
         }
 
         return new ElementNode("feed", children);
+    }
+
+    /// <summary>
+    /// Records of mixed scalar data, either as typed values or stringified.
+    /// </summary>
+    /// <remarks>
+    /// A matched pair: <c>records</c> and <c>records-text</c> hold the same numbers, the same
+    /// booleans and the same names, in the same structure. The only difference is whether a
+    /// value rides as a primitive or as its decimal spelling, so the gap between them is what
+    /// typed values are worth and nothing else.
+    /// </remarks>
+    internal static Node Records(int count, bool typedValues)
+    {
+        Node[] children = new Node[count];
+
+        for (int index = 0; index < count; index++)
+        {
+            long id = index;
+            double score = index * Math.PI;
+            bool active = index % 2 == 0;
+
+            children[index] = new ElementNode(
+                "row",
+                [
+                    new ElementNode("id", [typedValues
+                        ? Primitives.Int(id)
+                        : new TextNode(id.ToString(CultureInfo.InvariantCulture))]),
+                    new ElementNode("score", [typedValues
+                        ? Primitives.Double(score)
+                        : new TextNode(score.ToString("R", CultureInfo.InvariantCulture))]),
+                    new ElementNode("active", [typedValues
+                        ? Primitives.Bool(active)
+                        : new TextNode(active ? "true" : "false")]),
+                    new ElementNode("name", [new TextNode(
+                        FormattableString.Invariant($"name-{index:D4}"))]),
+                ]);
+        }
+
+        return new ElementNode("table", children);
     }
 
     /// <summary>

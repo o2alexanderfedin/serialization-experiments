@@ -50,6 +50,16 @@ public static class TlvDecoder
         }
 
         byte type = data[offset++];
+
+        // The shape nibble decides how far this frame reaches. Only length-prefixed frames
+        // carry a Length; everything else is self-delimiting, which is the whole reason a
+        // fixed-width value costs one byte of header rather than two.
+        PayloadShape shape = TlvType.ShapeOf(type);
+        if (shape != PayloadShape.LengthPrefixed)
+        {
+            return DecodeSelfDelimiting(data, ref offset, type, shape, tables);
+        }
+
         ulong length = Varint.Read(data, ref offset);
 
         if (length > (ulong)(data.Length - offset))
@@ -108,9 +118,135 @@ public static class TlvDecoder
             case TlvType.Typed:
                 return DecodeTyped(data, ref offset, end, tables, depth);
 
-            default:
+            case TlvType.Bytes:
+                return Leaf(type, data[offset..end], ref offset, end, tables);
+
+            case TlvType.Reserved:
                 throw new TlvFormatException(
-                    $"Unknown type 0x{type:X2} at offset {offset - 1 - Varint.Size(length)}.");
+                    $"Type 0x00 at offset {offset - 1 - Varint.Size(length)} is reserved and never valid.");
+
+            default:
+                // A length-prefixed frame whose type this reader does not know. The length
+                // says exactly how far it reaches, so it is carried through intact rather
+                // than rejected — refusing what you do not recognise is what ossifies a
+                // format, and the bytes are never interpreted.
+                return Leaf(type, data[offset..end], ref offset, end, tables);
+        }
+    }
+
+    /// <summary>
+    /// Reads a frame whose width comes from its shape rather than a Length field.
+    /// </summary>
+    private static Node DecodeSelfDelimiting(
+        ReadOnlySpan<byte> data,
+        ref int offset,
+        byte type,
+        PayloadShape shape,
+        Tables tables)
+    {
+        int start = offset;
+
+        switch (shape)
+        {
+            case PayloadShape.Empty:
+                break;
+
+            case PayloadShape.Varint:
+                Varint.Read(data, ref offset);
+                break;
+
+            case PayloadShape.Fixed:
+                int width = TlvType.FixedWidthOf(type);
+                if (width > data.Length - offset)
+                {
+                    throw new TlvFormatException(
+                        $"Frame type 0x{type:X2} at offset {offset - 1} needs {width} bytes " +
+                        $"but only {data.Length - offset} remain.");
+                }
+
+                offset += width;
+                break;
+
+            case PayloadShape.Extension:
+                Varint.Read(data, ref offset);
+                ulong extensionLength = Varint.Read(data, ref offset);
+                if (extensionLength > (ulong)(data.Length - offset))
+                {
+                    throw new TlvFormatException(
+                        $"Extension at offset {offset} declares {extensionLength} bytes " +
+                        $"but only {data.Length - offset} remain.");
+                }
+
+                offset += (int)extensionLength;
+                break;
+
+            default:
+                // 0xB_ to 0xE_ carry no width. Nothing can be allocated there precisely
+                // because a reader cannot step over it, so this is the one unknown that has
+                // to be an error rather than something to carry along.
+                throw new TlvFormatException(
+                    $"Frame type 0x{type:X2} at offset {offset - 1} has a reserved shape and cannot be skipped.");
+        }
+
+        return Leaf(type, data[start..offset], ref offset, offset, tables);
+    }
+
+    /// <summary>
+    /// Builds a leaf node from a Type byte and its payload, understood or not.
+    /// </summary>
+    private static Node Leaf(
+        byte type,
+        ReadOnlySpan<byte> payload,
+        ref int offset,
+        int end,
+        Tables tables)
+    {
+        offset = end;
+
+        if (!TlvType.IsKnown(type))
+        {
+            if (!tables.Options.AllowUnknownTypes)
+            {
+                throw new TlvFormatException(
+                    $"Frame type 0x{type:X2} is not known to this decoder, and unknown types are not allowed.");
+            }
+
+            return new UnknownNode(type, payload.ToArray());
+        }
+
+        if (type is TlvType.Float32 or TlvType.Float64)
+        {
+            RejectNonCanonicalNaN(type, payload);
+        }
+
+        return new PrimitiveNode(type, payload.ToArray());
+    }
+
+    /// <summary>
+    /// Rejects every NaN bit pattern but the canonical quiet one.
+    /// </summary>
+    /// <remarks>
+    /// Without this a document has as many encodings as there are NaN payloads, which breaks
+    /// the one-document-one-encoding rule that byte-exact re-encoding and any hashing or
+    /// signing of these bytes depend on.
+    /// </remarks>
+    private static void RejectNonCanonicalNaN(byte type, ReadOnlySpan<byte> payload)
+    {
+        if (type == TlvType.Float32)
+        {
+            uint bits = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload);
+            if (float.IsNaN(BitConverter.UInt32BitsToSingle(bits)) && bits != 0x7FC00000)
+            {
+                throw new TlvFormatException($"Non-canonical binary32 NaN 0x{bits:X8}.");
+            }
+
+            return;
+        }
+
+        ulong wide = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload);
+        if (double.IsNaN(BitConverter.UInt64BitsToDouble(wide)) && wide != 0x7FF8000000000000)
+        {
+            throw new TlvFormatException($"Non-canonical binary64 NaN 0x{wide:X16}.");
         }
     }
 

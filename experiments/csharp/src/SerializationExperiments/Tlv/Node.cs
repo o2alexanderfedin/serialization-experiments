@@ -46,3 +46,36 @@ public sealed record TextNode(string Value) : Node;
 /// </para>
 /// </remarks>
 public sealed record TypedNode(string TypeName, Node Inner) : Node;
+
+/// <summary>
+/// A typed value — a number, a boolean, null, a GUID, a blob.
+/// </summary>
+/// <param name="Type">The frame's Type byte.</param>
+/// <param name="Payload">The payload exactly as it appears on the wire.</param>
+/// <remarks>
+/// <para>
+/// One record for every primitive rather than one per kind. A record per kind reads better
+/// at a call site, but it multiplies the switch in three encoder passes and two decoder
+/// methods by the number of types, and every one of those cases would say the same thing:
+/// write the Type byte, write the payload. Typed access lives in <see cref="Primitives"/>
+/// instead, where it costs nothing structural.
+/// </para>
+/// <para>
+/// The payload is kept as raw bytes rather than a decoded value so that re-encoding is
+/// byte-exact by construction rather than by care.
+/// </para>
+/// </remarks>
+public sealed record PrimitiveNode(byte Type, ReadOnlyMemory<byte> Payload) : Node;
+
+/// <summary>
+/// A frame whose shape was understood but whose type was not.
+/// </summary>
+/// <param name="Type">The frame's Type byte.</param>
+/// <param name="Payload">The payload exactly as it appears on the wire.</param>
+/// <remarks>
+/// Kept so that a document using a type allocated after this reader was written passes
+/// through it unchanged instead of being rejected. Deliberately a separate record from
+/// <see cref="PrimitiveNode"/>: "I did not understand this" must not be silently mistaken
+/// for a value, and a <c>switch</c> that omits this case fails loudly.
+/// </remarks>
+public sealed record UnknownNode(byte Type, ReadOnlyMemory<byte> Payload) : Node;

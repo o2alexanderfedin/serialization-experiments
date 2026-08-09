@@ -51,6 +51,22 @@ internal static class Sizes
                 builder.Append(text.Value);
                 break;
 
+            case PrimitiveNode primitive:
+                // The XML a typed value would have to be written as: its decimal spelling.
+                // That is the comparison worth making, since XML has no other way to say 42.
+                builder.Append(primitive.KindOf() switch
+                {
+                    PrimitiveKind.Null => string.Empty,
+                    PrimitiveKind.Boolean => primitive.AsBool() ? "true" : "false",
+                    PrimitiveKind.SignedInteger => primitive.AsInt().ToString(CultureInfo.InvariantCulture),
+                    PrimitiveKind.UnsignedInteger => primitive.AsUInt().ToString(CultureInfo.InvariantCulture),
+                    PrimitiveKind.Single => primitive.AsFloat().ToString("R", CultureInfo.InvariantCulture),
+                    PrimitiveKind.Double => primitive.AsDouble().ToString("R", CultureInfo.InvariantCulture),
+                    PrimitiveKind.Guid => primitive.AsGuid().ToString(),
+                    _ => Convert.ToBase64String(primitive.Payload.Span),
+                });
+                break;
+
             case TypedNode typed:
                 // The nearest attribute-free XML equivalent of a type tag is an extra
                 // wrapping element, so that is what the comparison charges it.

@@ -45,6 +45,9 @@ Document shapes, each 100 and 1000 elements:
 | `values-repeat` | values drawn from a 10-word vocabulary — the realistic enum-like case |
 | `values-unique` | identical to `values-repeat` but every value distinct — the control |
 | `values-mixed` | 800 distinct values then 200 from a 4-word vocabulary — a vocabulary discovered late |
+| `typed` | `values-repeat` with every child wrapped in a type tag — isolates what polymorphism costs |
+| `records` | rows of mixed scalar data as typed values |
+| `records-text` | the same rows stringified — the control for `records` |
 
 `values-repeat` and `values-unique` are a matched pair: same element name, same child count,
 same 10-character value length, so their XML is byte-for-byte the same size. The only
@@ -308,6 +311,37 @@ If the tax on distinct-value documents matters, the obvious lever is to intern o
 the measuring pass sees more than once — it already walks the whole tree, so the frequency
 is available before the emit pass runs. That trades a second dictionary for the savings and
 has not been measured.
+
+## Typed values
+
+`records` and `records-text` hold the same numbers, booleans and names in the same structure.
+The only difference is whether a value rides as a primitive or as its decimal spelling.
+
+| 1000 rows | TLV bytes | vs XML | Encode allocation |
+|---|---:|---:|---:|
+| `records` — typed | **38,972** | 39.4% | 405,048 |
+| `records-text` — stringified | 53,388 | 54.0% | 533,160 |
+| | **−27%** | | **−24%** |
+
+Per value, measured rather than argued: `true` and `null` are **1 byte**, a small integer
+**2**, a `float` **5**, a `double` **9**, a `Guid` **17**. Under the old uniform
+Type-Length-Value frame every one of those would have paid an extra byte to declare a width
+already implied by the type.
+
+### Where typed values lose
+
+An earlier version of `records` computed its `score` column as `index * 1.5`, which spells as
+`"1498.5"` — six characters, eight bytes framed, against nine for a `double`. On that data the
+whole advantage collapsed to **2%** (38,972 against 39,766), because text won the float column
+outright and only the booleans and small integers still paid off.
+
+The typed figure is identical in both runs, since a `double` is always nine bytes whatever it
+holds. So the rule is simply: typed values win when the decimal spelling is long, which is
+what real floating-point data looks like, and lose on round numbers. Anyone quoting the 27%
+should know it is a property of the data, not of the format.
+
+`f32` is the lever where precision allows — five bytes against nine, and it beats almost any
+decimal spelling.
 
 ## Not yet measured
 

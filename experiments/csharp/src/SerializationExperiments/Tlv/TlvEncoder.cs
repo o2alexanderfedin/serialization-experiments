@@ -204,6 +204,14 @@ public static class TlvEncoder
                 valueLength = typeHead + Measure(typed.Inner, tables, sizes, depth + 1);
                 break;
 
+            case PrimitiveNode primitive:
+                valueLength = primitive.Payload.Length;
+                break;
+
+            case UnknownNode unknown:
+                valueLength = unknown.Payload.Length;
+                break;
+
             case ElementNode element:
                 long head;
                 if (tables.Names.TryGetValue(element.Name, out int nameId))
@@ -237,7 +245,7 @@ public static class TlvEncoder
         }
 
         sizes[index] = valueLength;
-        return 1 + Varint.Size((ulong)valueLength) + valueLength;
+        return FrameSize(TypeOf(node), valueLength);
     }
 
     /// <summary>
@@ -300,6 +308,16 @@ public static class TlvEncoder
                 Emit(typed.Inner, sink, sizes, ref cursor, tables);
                 break;
 
+            case PrimitiveNode primitive:
+                EmitValue(primitive.Type, primitive.Payload.Span, sink);
+                break;
+
+            case UnknownNode unknown:
+                // Written back exactly as it arrived. The codec never understood it and does
+                // not need to: the shape nibble was enough to measure and copy it.
+                EmitValue(unknown.Type, unknown.Payload.Span, sink);
+                break;
+
             case ElementNode element:
                 sink.Write([TlvType.Element]);
                 Varint.Write((ulong)valueLength, sink);
@@ -329,6 +347,59 @@ public static class TlvEncoder
             default:
                 throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node));
         }
+    }
+
+    /// <summary>
+    /// The Type byte a node will be written as.
+    /// </summary>
+    private static byte TypeOf(Node node) => node switch
+    {
+        ElementNode => TlvType.Element,
+        TypedNode => TlvType.Typed,
+        PrimitiveNode primitive => primitive.Type,
+        UnknownNode unknown => unknown.Type,
+
+        // Text is the one kind whose Type is not fixed by its node: which of TEXT, TEXT_ONCE
+        // and TEXT_REF it becomes depends on the interning tables. All three are shape 0, so
+        // the frame size is the same whichever it is.
+        TextNode => TlvType.Text,
+        _ => throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node)),
+    };
+
+    /// <summary>
+    /// Total frame size, header included, for a payload of <paramref name="valueLength"/> bytes.
+    /// </summary>
+    /// <remarks>
+    /// The shape nibble decides whether a Length is written at all. That is the point of the
+    /// split: a fixed-width value pays one byte of Type and nothing else, where the old
+    /// uniform Type-Length-Value frame charged a byte to state a width already implied.
+    /// </remarks>
+    private static long FrameSize(byte type, long valueLength) => TlvType.ShapeOf(type) switch
+    {
+        PayloadShape.LengthPrefixed => 1 + Varint.Size((ulong)valueLength) + valueLength,
+
+        // Every other shape is self-delimiting, so no Length is written. An extension's
+        // subtype and length are part of its payload, which keeps them in wire order and
+        // makes re-encoding a copy rather than a reconstruction.
+        PayloadShape.Empty or PayloadShape.Varint or PayloadShape.Fixed
+            or PayloadShape.Extension => 1 + valueLength,
+        _ => throw new ArgumentException($"Type 0x{type:X2} has no writable shape.", nameof(type)),
+    };
+
+    /// <summary>
+    /// Writes a leaf frame: the Type byte, a Length only where the shape calls for one, then
+    /// the payload verbatim.
+    /// </summary>
+    private static void EmitValue(byte type, ReadOnlySpan<byte> payload, IByteSink sink)
+    {
+        sink.Write([type]);
+
+        if (TlvType.ShapeOf(type) == PayloadShape.LengthPrefixed)
+        {
+            Varint.Write((ulong)payload.Length, sink);
+        }
+
+        sink.Write(payload);
     }
 
     /// <summary>
@@ -398,6 +469,12 @@ public static class TlvEncoder
                 ref int occurrences = ref CollectionsMarshal.GetValueRefOrAddDefault(
                     counts, text.Value, out _);
                 occurrences++;
+                break;
+
+            case PrimitiveNode:
+            case UnknownNode:
+                // No text, so nothing to count. Primitives are not interned: a reference
+                // costs three bytes and a small integer costs two, so it could only lose.
                 break;
 
             case TypedNode typed:

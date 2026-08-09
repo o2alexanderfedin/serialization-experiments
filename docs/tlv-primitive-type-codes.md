@@ -7,6 +7,13 @@ This is **phase A** of supporting arbitrary object serialization. It changes the
 and nothing else: no object mapper, no property naming, no schema. Those are separate designs
 that depend on this one, and are listed at the end.
 
+> **Implemented.** `BYTES`, `NULL`, `FALSE`, `TRUE`, `UINT`, `SINT`, `F32`, `F64` and `GUID`
+> are on the wire; the rest of the registry is allocated but not emitted. Measured on 1,000
+> records of mixed scalar data: **38,972 bytes typed against 53,388 stringified, 27% smaller,
+> with 24% less allocation**. Every pre-existing document encodes to the same bytes it did
+> before. The [performance report](tlv-performance.md) carries the numbers and the one case
+> where typed values lose.
+
 ## The problem
 
 Every value the format can carry today is UTF-8 text. Anything that is not text has to be

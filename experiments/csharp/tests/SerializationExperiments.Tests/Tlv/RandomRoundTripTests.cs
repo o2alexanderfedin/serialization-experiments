@@ -152,10 +152,52 @@ public sealed class RandomRoundTripTests
 
         return choice switch
         {
-            0 or 1 or 2 => new TextNode(Values[random.Next(Values.Length)]),
+            0 or 1 => new TextNode(Values[random.Next(Values.Length)]),
+            2 => BuildPrimitive(random),
             3 => new TypedNode(TypeNames[random.Next(TypeNames.Length)], Build(random, depth + 1)),
+            4 => BuildUnknown(random),
             _ => BuildElement(random, depth),
         };
+    }
+
+    /// <summary>A typed value, drawn across every implemented shape.</summary>
+    private static Node BuildPrimitive(Random random) => random.Next(9) switch
+    {
+        0 => Primitives.Null(),
+        1 => Primitives.Bool(random.Next(2) == 0),
+        2 => Primitives.Int(random.Next(-1000, 1000)),
+        3 => Primitives.Int(random.NextInt64()),
+        4 => Primitives.UInt((ulong)random.NextInt64()),
+        5 => Primitives.Double(random.NextDouble() * 1e6 - 5e5),
+        6 => Primitives.Float((float)random.NextDouble()),
+        7 => Primitives.Guid(new Guid(RandomBytes(random, 16))),
+        _ => Primitives.Bytes(RandomBytes(random, random.Next(8))),
+    };
+
+    /// <summary>
+    /// A frame of a type no reader knows, in each self-delimiting shape.
+    /// </summary>
+    /// <remarks>
+    /// These have to survive a round trip byte-for-byte. Mixing them in among real values is
+    /// what catches a shape whose width is computed one way when measuring and another when
+    /// emitting — an error that leaves the document well-formed and only shifts what follows.
+    /// </remarks>
+    private static Node BuildUnknown(Random random)
+    {
+        (byte Type, int Width)[] shapes =
+        [
+            (0x1F, 0), (0x3F, 1), (0x4F, 2), (0x5F, 4), (0x6F, 8), (0x7F, 16),
+        ];
+
+        (byte type, int width) = shapes[random.Next(shapes.Length)];
+        return new UnknownNode(type, RandomBytes(random, width));
+    }
+
+    private static byte[] RandomBytes(Random random, int count)
+    {
+        byte[] bytes = new byte[count];
+        random.NextBytes(bytes);
+        return bytes;
     }
 
     private static Node BuildElement(Random random, int depth)

@@ -35,6 +35,14 @@ internal static class Frames
     private static void Walk(ReadOnlySpan<byte> data, ref int offset, List<Frame> frames)
     {
         byte type = data[offset++];
+
+        if (TlvType.ShapeOf(type) != PayloadShape.LengthPrefixed)
+        {
+            frames.Add(new Frame(type, 0, 0));
+            SkipSelfDelimiting(data, ref offset, type);
+            return;
+        }
+
         ulong length = ReadVarint(data, ref offset);
         int end = offset + (int)length;
 
@@ -71,6 +79,27 @@ internal static class Frames
 
             default:
                 throw new InvalidOperationException($"Unknown type 0x{type:X2} at offset {offset}.");
+        }
+    }
+
+    private static void SkipSelfDelimiting(ReadOnlySpan<byte> data, ref int offset, byte type)
+    {
+        switch (TlvType.ShapeOf(type))
+        {
+            case PayloadShape.Empty:
+                break;
+            case PayloadShape.Varint:
+                ReadVarint(data, ref offset);
+                break;
+            case PayloadShape.Fixed:
+                offset += TlvType.FixedWidthOf(type);
+                break;
+            case PayloadShape.Extension:
+                ReadVarint(data, ref offset);
+                offset += (int)ReadVarint(data, ref offset);
+                break;
+            default:
+                throw new InvalidOperationException($"Type 0x{type:X2} has no skippable shape.");
         }
     }
 

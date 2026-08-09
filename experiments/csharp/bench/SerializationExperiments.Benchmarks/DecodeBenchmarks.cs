@@ -15,7 +15,7 @@ public class DecodeBenchmarks
 {
     private byte[] encoded = [];
 
-    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed")]
+    [Params("repeated", "unique", "deep", "text-heavy", "values-repeat", "values-unique", "values-mixed", "typed", "records", "records-text")]
     public string Shape { get; set; } = "repeated";
 
     [Params(100, 1_000)]

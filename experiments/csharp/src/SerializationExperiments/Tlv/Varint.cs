@@ -41,6 +41,28 @@ internal static class Varint
         sink.Write(buffer[..count]);
     }
 
+    /// <summary>Encodes <paramref name="value"/> to a new array.</summary>
+    /// <param name="value">Value to encode.</param>
+    /// <returns>Its canonical varint bytes.</returns>
+    /// <remarks>
+    /// For building a <see cref="PrimitiveNode"/> payload, which is held as bytes so that
+    /// re-encoding is byte-exact. The encoder's hot path uses
+    /// <see cref="Write(ulong, IByteSink)"/> and allocates nothing.
+    /// </remarks>
+    internal static byte[] ToBytes(ulong value)
+    {
+        byte[] buffer = new byte[Size(value)];
+        int count = 0;
+        while (value >= 0x80)
+        {
+            buffer[count++] = (byte)(value | 0x80);
+            value >>= 7;
+        }
+
+        buffer[count] = (byte)value;
+        return buffer;
+    }
+
     /// <summary>Reads a value from <paramref name="data"/>, advancing <paramref name="offset"/>.</summary>
     /// <param name="data">Buffer to read from.</param>
     /// <param name="offset">Position to read at; advanced past the value.</param>
