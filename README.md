@@ -26,7 +26,10 @@ docs/                 # design notes, wire-format specs, and measured results
 
 The TLV codec currently under `experiments/csharp/` is documented in
 [`docs/xml-to-tlv-dynamic-tag-table.md`](docs/xml-to-tlv-dynamic-tag-table.md) (wire
-format), [`docs/tlv-length-prefix-without-buffering.md`](docs/tlv-length-prefix-without-buffering.md)
+format), [`docs/tlv-primitive-type-codes.md`](docs/tlv-primitive-type-codes.md) (typed
+values and the shape nibble),
+[`docs/tlv-object-mapper.md`](docs/tlv-object-mapper.md) (objects — design only, not yet
+built), [`docs/tlv-length-prefix-without-buffering.md`](docs/tlv-length-prefix-without-buffering.md)
 (why encoding is two passes), and [`docs/tlv-performance.md`](docs/tlv-performance.md)
 (numbers).
 

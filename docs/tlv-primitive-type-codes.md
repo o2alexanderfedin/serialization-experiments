@@ -238,6 +238,12 @@ Deliberately out of scope, each because it belongs to a later phase or has no me
   two, so referencing one can only lose. It could pay for a repeated `Guid` or hash, but
   entangling that with the existing value table before there is a measurement to justify it
   would complicate both. Text interning is untouched.
+
+  > **The measurement now exists, and it is worse than expected.** Designing phase B produced
+  > it: a `Guid` that repeats costs **6 bytes** as interned text and **20 bytes** as a `GUID`
+  > frame — **−233%**. Any document carrying a repeated identifier is made substantially larger
+  > by this decision, which covers most real record data. Reopened as an open question in
+  > [the object mapper note](tlv-object-mapper.md).
 - **No arrays or objects.** `ELEMENT` already nests. Whether collections deserve their own
   frame is a question for the mapper phase, which will have the data to answer it.
 - **No property names or ordinals.** Phase C.
@@ -363,9 +369,23 @@ The format's standing rule is that claims get measured, not asserted.
 
 | | | Depends on |
 |---|---|---|
-| **B** | Object mapper, self-describing: POCO ↔ `Node` by property name, collections, null. A `FIELD` frame, since a property has exactly one value and so needs no `Length`. | A |
+| **B** | Object mapper, self-describing: POCO ↔ `Node` by property name, collections, null. Four length-prefixed frames — `FIELD`, `ARRAY`, `MAP`, `OBJECT`. Designed in [the object mapper note](tlv-object-mapper.md). | A |
 | **C** | Ordinals opt-in: a contract assigning numbers, and a wire mode where a field's identifier is an ordinal rather than an interned name. Folds the shape nibble into the field tag, protobuf-style, so the concrete type comes from the schema while unknown fields stay skippable. | B |
 | **D** | Identity and cycles: reference preservation, two-phase construction, an amplification budget. Optional. | B |
 
 A is first because a mapper built on stringified numbers would bake the bloat in permanently,
 and every measurement after it would be against a bad baseline.
+
+### Correction: B's `FIELD` frame carries a `Length` after all
+
+This table originally promised B "a `FIELD` frame, since a property has exactly one value and
+so needs no `Length`". **That frame cannot be built.** A layout of "one varint, then one nested
+frame" needs a shape meaning exactly that, and the shape nibble is full: `0x0_`–`0xA_` are
+allocated, `0xF_` is the extension, and `0xB_`–`0xE_` can never be allocated because they carry
+no width. Nothing is left to define, so `FIELD` sits in shape `0x0_` and pays the `Length` byte.
+
+The saving is still reachable by inverting the frame — a name *marker* that precedes its value
+as a sibling rather than a container that holds it, both self-delimiting — and `0x22` is
+reserved for that. It is deferred because it would be the first frame in this format whose
+meaning depends on the next frame, which is a property worth more than one byte per field until
+a measurement says otherwise.
