@@ -60,6 +60,18 @@ internal static class Frames
                 frames.Add(new Frame(type, id, offset - idStart));
                 break;
 
+            case TlvType.Intern:
+                // No name reference of its own — the wrapper is a type byte, a length, and
+                // the one value frame that claims the id.
+                frames.Add(new Frame(type, 0, 0));
+                Walk(data, ref offset, frames);
+                break;
+
+            case TlvType.Bytes:
+                frames.Add(new Frame(type, 0, 0));
+                offset = end;
+                break;
+
             case TlvType.Element:
             case TlvType.Typed:
                 frames.Add(new Frame(type, 0, 0));

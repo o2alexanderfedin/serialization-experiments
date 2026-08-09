@@ -56,10 +56,11 @@ Only shape `0x0_` carries a Length. Every other shape is self-delimiting, which 
 |---|---|---|---|
 | `0x01` | `ELEMENT` | constructed | NameRef, optional literal, then child frames |
 | `0x02` | `TEXT` | primitive | UTF-8 bytes; assigns the next value id |
-| `0x03` | `TEXT_REF` | primitive | varint id of a value defined by an earlier `TEXT` |
+| `0x03` | `TEXT_REF` | primitive | varint id of a value defined earlier; text **or** primitive |
 | `0x04` | `TEXT_ONCE` | primitive | UTF-8 bytes; assigns **no** value id |
 | `0x05` | `TYPED` | constructed | TypeRef, optional literal, then exactly one child frame |
 | `0x06` | `BYTES` | primitive | raw octets |
+| `0x0C` | `INTERN` | constructed | exactly one value frame, whose value assigns the next value id |
 | `0x10` | `NULL` | primitive | nothing |
 | `0x11` / `0x12` | `FALSE` / `TRUE` | primitive | nothing |
 | `0x20` | `UINT` | primitive | unsigned integer, canonical varint |
@@ -116,7 +117,37 @@ this design; nothing else did.
 
 | Order | Field | Size | Notes |
 |---|---|---|---|
-| 1 | `ValueId` | 1–5 B | varint id of a value defined by an earlier `TEXT` frame |
+| 1 | `ValueId` | 1–5 B | varint id of a value defined by an earlier `TEXT` or `INTERN` frame |
+
+The referenced value may be text or a primitive. One id space, not two, because the decoder
+keeps one list and appends to it as claiming frames arrive; two counters would agree with the
+encoder exactly until a document mixed the kinds, and then references would resolve to the
+wrong value with every length still checking out.
+
+### `INTERN` value
+
+| Order | Field | Size | Notes |
+|---|---|---|---|
+| 1 | `Child` | rest | Exactly one complete frame, filling `Length` exactly |
+
+The child must be a primitive. `TEXT` already claims an id and would register twice; a
+constructed frame has no single value to register; and an unknown frame has to go back exactly
+as it arrived, which rewriting it as a reference is not.
+
+`INTERN` decodes to the value it wraps, exactly as `TEXT` decodes to its text — it is a claim,
+not a container. Re-encoding stays byte-exact because the encoder rederives which values are
+worth interning from occurrence counts, and so wraps the same first occurrence again.
+
+**Why a wrapper rather than a code per type.** `TEXT` can say "this claims an id" in its own
+type code because `TEXT_ONCE` exists to mean the opposite. A fixed-width value would need a
+quiet twin of every primitive — `GUID_ONCE`, `F64_ONCE`, and so on — which is sixteen codes per
+shape spent on one bit. Hoisting the bit into a wrapper costs two bytes on a first occurrence
+and nothing thereafter.
+
+**What it is worth.** A repeated `Guid` costs 20 bytes as a `GUID` frame inside an element and
+6 as a reference. On the `identifiers` shape — a foreign key drawn from a pool of ten — it is
+28,962 bytes against 15,121, **47.8% smaller**. On distinct values it does nothing at all,
+which is the intended behaviour rather than a shortfall.
 
 ### `TYPED` value
 

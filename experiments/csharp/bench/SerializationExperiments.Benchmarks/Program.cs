@@ -36,6 +36,12 @@ public static class Program
             return;
         }
 
+        if (args is ["compare", ..])
+        {
+            Compare.Report();
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(Assembly.GetExecutingAssembly()).Run(args);
     }
 }

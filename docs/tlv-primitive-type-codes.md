@@ -234,16 +234,18 @@ Varints must already be shortest-form. Extending that:
 
 Deliberately out of scope, each because it belongs to a later phase or has no measured need:
 
-- **No interning of non-text values.** A reference costs three bytes; a small integer costs
-  two, so referencing one can only lose. It could pay for a repeated `Guid` or hash, but
-  entangling that with the existing value table before there is a measurement to justify it
-  would complicate both. Text interning is untouched.
+- ~~**No interning of non-text values.**~~ **Reversed — see below.** The original reasoning
+  was that a reference costs three bytes and a small integer costs two, so referencing one
+  could only lose. That holds for small integers and fails for everything wider.
 
-  > **The measurement now exists, and it is worse than expected.** Designing phase B produced
-  > it: a `Guid` that repeats costs **6 bytes** as interned text and **20 bytes** as a `GUID`
-  > frame — **−233%**. Any document carrying a repeated identifier is made substantially larger
-  > by this decision, which covers most real record data. Reopened as an open question in
-  > [the object mapper note](tlv-object-mapper.md).
+  > **Measured, and reversed.** Designing phase B produced the measurement this decision was
+  > waiting on: a `Guid` that repeats cost **6 bytes** as interned text against **20** as a
+  > `GUID` frame — **−233%**, making any document with a repeated identifier substantially
+  > larger. Repeated primitives now claim value ids through an `INTERN` wrapper (`0x0C`). On
+  > the `identifiers` shape that is 28,962 bytes against 15,121, **47.8% smaller**; documents
+  > whose values are all distinct are unchanged. The arithmetic that justified the original
+  > decision was correct and its scope was not: it was reasoned from the narrowest primitive
+  > rather than the widest.
 - **No arrays or objects.** `ELEMENT` already nests. Whether collections deserve their own
   frame is a question for the mapper phase, which will have the data to answer it.
 - **No property names or ordinals.** Phase C.

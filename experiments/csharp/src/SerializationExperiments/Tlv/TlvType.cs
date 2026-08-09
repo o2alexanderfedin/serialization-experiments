@@ -77,6 +77,24 @@ internal static class TlvType
     /// <summary>Primitive: raw octets.</summary>
     internal const byte Bytes = 0x06;
 
+    /// <summary>
+    /// Constructed: exactly one value frame, whose value claims the next value id.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Text"/> can say "this value claims an id" in its own type code because it
+    /// has <see cref="TextOnce"/> to contrast with. A fixed-width value has no spare code per
+    /// type to spend on the same distinction — there would have to be a quiet twin of every
+    /// primitive — so the claim is hoisted into a wrapper instead.
+    /// </para>
+    /// <para>
+    /// Two bytes on the first occurrence buys a three-byte reference on every later one. For a
+    /// <see cref="Guid"/> that is 17 bytes down to 3, which is the difference between losing to
+    /// protobuf by 29% on identifier-heavy data and matching it.
+    /// </para>
+    /// </remarks>
+    internal const byte Intern = 0x0C;
+
     // ---- shape 0x1_ : no payload ----
 
     /// <summary>The absence of a value.</summary>
@@ -149,6 +167,6 @@ internal static class TlvType
     /// <param name="type">A Type byte.</param>
     /// <returns><see langword="true"/> if a node can be built from it.</returns>
     internal static bool IsKnown(byte type) => type is
-        Element or Text or TextRef or TextOnce or Typed or Bytes or
+        Element or Text or TextRef or TextOnce or Typed or Bytes or Intern or
         Null or False or True or UInt or SInt or Float32 or Float64 or Guid;
 }

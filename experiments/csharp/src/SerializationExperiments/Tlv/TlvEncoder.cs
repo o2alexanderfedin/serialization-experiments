@@ -65,7 +65,7 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(root);
 
         List<long> sizes = [];
-        Dictionary<string, int> occurrences = CountValues(root);
+        Occurrences occurrences = CountValues(root);
         long total = Measure(root, new Tables(occurrences), sizes, depth: 0);
 
         if (total > Array.MaxLength)
@@ -95,7 +95,7 @@ public static class TlvEncoder
         ArgumentNullException.ThrowIfNull(sink);
 
         List<long> sizes = [];
-        Dictionary<string, int> occurrences = CountValues(root);
+        Occurrences occurrences = CountValues(root);
         long expected = Measure(root, new Tables(occurrences), sizes, depth: 0);
         return EmitMeasured(root, sink, sizes, expected, occurrences);
     }
@@ -108,7 +108,7 @@ public static class TlvEncoder
         IByteSink sink,
         List<long> sizes,
         long expected,
-        Dictionary<string, int> occurrences)
+        Occurrences occurrences)
     {
         long before = sink.BytesWritten;
         int cursor = 0;
@@ -161,9 +161,18 @@ public static class TlvEncoder
         sizes.Add(0);
 
         long valueLength;
+
+        // The Type byte a frame ends up with is not always fixed by its node. Text picks
+        // between TEXT, TEXT_ONCE and TEXT_REF, and a primitive now picks between its own
+        // type, INTERN, and a reference — and unlike text, those have different shapes and so
+        // different framing. Each branch therefore states its own effective type rather than
+        // deriving it from the node afterwards.
+        byte effectiveType;
+
         switch (node)
         {
             case TextNode text:
+                effectiveType = TlvType.Text;
                 if (tables.ValueIds.TryGetValue(text.Value, out int valueId))
                 {
                     valueLength = Varint.Size((ulong)valueId);
@@ -179,13 +188,14 @@ public static class TlvEncoder
                     // knowledge of the rule that produced them.
                     if (tables.ClaimsId(text.Value, textBytes))
                     {
-                        tables.ValueIds.Add(text.Value, tables.ValueIds.Count);
+                        tables.ValueIds.Add(text.Value, tables.NextValueId++);
                     }
                 }
 
                 break;
 
             case TypedNode typed:
+                effectiveType = TlvType.Typed;
                 long typeHead;
                 if (tables.TypeNames.TryGetValue(typed.TypeName, out int typeId))
                 {
@@ -205,14 +215,34 @@ public static class TlvEncoder
                 break;
 
             case PrimitiveNode primitive:
-                valueLength = primitive.Payload.Length;
+                if (tables.PrimitiveIds.TryGetValue(primitive, out int primitiveId))
+                {
+                    effectiveType = TlvType.TextRef;
+                    valueLength = Varint.Size((ulong)primitiveId);
+                }
+                else if (tables.ClaimsPrimitiveId(primitive))
+                {
+                    // The wrapper's value is the whole inner frame, so its length is what the
+                    // inner frame costs — header included.
+                    effectiveType = TlvType.Intern;
+                    valueLength = FrameSize(primitive.Type, primitive.Payload.Length);
+                    tables.PrimitiveIds.Add(primitive, tables.NextValueId++);
+                }
+                else
+                {
+                    effectiveType = primitive.Type;
+                    valueLength = primitive.Payload.Length;
+                }
+
                 break;
 
             case UnknownNode unknown:
+                effectiveType = unknown.Type;
                 valueLength = unknown.Payload.Length;
                 break;
 
             case ElementNode element:
+                effectiveType = TlvType.Element;
                 long head;
                 if (tables.Names.TryGetValue(element.Name, out int nameId))
                 {
@@ -245,7 +275,7 @@ public static class TlvEncoder
         }
 
         sizes[index] = valueLength;
-        return FrameSize(TypeOf(node), valueLength);
+        return FrameSize(effectiveType, valueLength);
     }
 
     /// <summary>
@@ -282,7 +312,7 @@ public static class TlvEncoder
 
                     if (claimsId)
                     {
-                        tables.ValueIds.Add(text.Value, tables.ValueIds.Count);
+                        tables.ValueIds.Add(text.Value, tables.NextValueId++);
                     }
                 }
 
@@ -309,7 +339,24 @@ public static class TlvEncoder
                 break;
 
             case PrimitiveNode primitive:
-                EmitValue(primitive.Type, primitive.Payload.Span, sink);
+                if (tables.PrimitiveIds.TryGetValue(primitive, out int primitiveId))
+                {
+                    sink.Write([TlvType.TextRef]);
+                    Varint.Write((ulong)valueLength, sink);
+                    Varint.Write((ulong)primitiveId, sink);
+                }
+                else if (tables.ClaimsPrimitiveId(primitive))
+                {
+                    sink.Write([TlvType.Intern]);
+                    Varint.Write((ulong)valueLength, sink);
+                    EmitValue(primitive.Type, primitive.Payload.Span, sink);
+                    tables.PrimitiveIds.Add(primitive, tables.NextValueId++);
+                }
+                else
+                {
+                    EmitValue(primitive.Type, primitive.Payload.Span, sink);
+                }
+
                 break;
 
             case UnknownNode unknown:
@@ -348,23 +395,6 @@ public static class TlvEncoder
                 throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node));
         }
     }
-
-    /// <summary>
-    /// The Type byte a node will be written as.
-    /// </summary>
-    private static byte TypeOf(Node node) => node switch
-    {
-        ElementNode => TlvType.Element,
-        TypedNode => TlvType.Typed,
-        PrimitiveNode primitive => primitive.Type,
-        UnknownNode unknown => unknown.Type,
-
-        // Text is the one kind whose Type is not fixed by its node: which of TEXT, TEXT_ONCE
-        // and TEXT_REF it becomes depends on the interning tables. All three are shape 0, so
-        // the frame size is the same whichever it is.
-        TextNode => TlvType.Text,
-        _ => throw new ArgumentException($"Unsupported node type {node.GetType()}.", nameof(node)),
-    };
 
     /// <summary>
     /// Total frame size, header included, for a payload of <paramref name="valueLength"/> bytes.
@@ -442,14 +472,34 @@ public static class TlvEncoder
     /// depends on whether it will be seen again — which is not knowable at the moment the
     /// measuring pass reaches it.
     /// </remarks>
-    private static Dictionary<string, int> CountValues(Node root)
+    /// <summary>What a reference to an interned value costs, in bytes.</summary>
+    /// <remarks>
+    /// A type byte, a length byte and a one-byte id. Ids past 127 need a second varint byte,
+    /// so this is a floor: the rule built on it stays conservative rather than becoming wrong,
+    /// declining some values it could have claimed and claiming none it should not.
+    /// </remarks>
+    private const long ReferenceCost = 3;
+
+    /// <summary>
+    /// Whether interning <paramref name="node"/> could ever save a byte, however often it
+    /// recurs.
+    /// </summary>
+    /// <remarks>
+    /// Purely a function of the frame's own size, so it can be applied in the counting pass
+    /// before occurrence counts exist. That is the point: it keeps values that can never pay
+    /// out of the occurrence table entirely.
+    /// </remarks>
+    private static bool CanEverPayToIntern(PrimitiveNode node) =>
+        FrameSize(node.Type, node.Payload.Length) > ReferenceCost;
+
+    private static Occurrences CountValues(Node root)
     {
-        Dictionary<string, int> counts = new(StringComparer.Ordinal);
+        Occurrences counts = new();
         CountValues(root, counts, depth: 0);
         return counts;
     }
 
-    private static void CountValues(Node node, Dictionary<string, int> counts, int depth)
+    private static void CountValues(Node node, Occurrences counts, int depth)
     {
         // This pass recurses too, so it needs the same guard as the measuring pass; without
         // it a too-deep tree would exhaust the stack here, before anything could reject it.
@@ -467,14 +517,33 @@ public static class TlvEncoder
                 // pass and the strings can be long — on a document of 200-character values
                 // the second hash was measurable.
                 ref int occurrences = ref CollectionsMarshal.GetValueRefOrAddDefault(
-                    counts, text.Value, out _);
+                    counts.Text, text.Value, out _);
                 occurrences++;
                 break;
 
-            case PrimitiveNode:
+            case PrimitiveNode primitive:
+                // Counted for the same reason text is: whether the first occurrence should
+                // claim an id depends on whether it recurs, which is not knowable at the
+                // moment the measuring pass reaches it.
+                //
+                // Only values that could ever pay are counted. A frame no larger than a
+                // reference can never be worth referencing however often it recurs, and
+                // counting it would still cost a hash and a dictionary slot — measured at
+                // +59% encode allocation on a shape whose primitives are all distinct, for
+                // exactly zero bytes saved. The test is the same one ClaimsPrimitiveId
+                // applies, so nothing that could have interned is dropped here.
+                if (CanEverPayToIntern(primitive))
+                {
+                    ref int primitiveCount = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                        counts.Primitives, primitive, out _);
+                    primitiveCount++;
+                }
+
+                break;
+
             case UnknownNode:
-                // No text, so nothing to count. Primitives are not interned: a reference
-                // costs three bytes and a small integer costs two, so it could only lose.
+                // Never interned. The codec did not understand this frame, so it must go back
+                // exactly as it arrived; rewriting it as a reference would be interpretation.
                 break;
 
             case TypedNode typed:
@@ -501,8 +570,21 @@ public static class TlvEncoder
     /// How often each value appears, from <see cref="CountValues(Node)"/>. Shared between the
     /// passes because it is derived from the tree alone and cannot drift.
     /// </param>
-    private sealed class Tables(Dictionary<string, int> occurrences)
+    private sealed class Tables(Occurrences occurrences)
     {
+        /// <summary>
+        /// The next id a value of any kind will claim.
+        /// </summary>
+        /// <remarks>
+        /// Text and primitives share one id space because the decoder has one list: it appends
+        /// an entry for every <c>TEXT</c> and every <c>INTERN</c> frame it reads, in the order
+        /// it reads them. Two counters would put the encoder's numbering out of step with the
+        /// decoder's the first time a document mixed the two, and the symptom would be the one
+        /// this format has already been bitten by — a well-formed document whose references
+        /// silently resolve to the wrong value.
+        /// </remarks>
+        internal int NextValueId { get; set; }
+
         internal Dictionary<string, int> Names { get; } = new(StringComparer.Ordinal);
 
         /// <summary>
@@ -512,6 +594,18 @@ public static class TlvEncoder
 
         /// <summary>Values that claimed an id, in first-occurrence document order.</summary>
         internal Dictionary<string, int> ValueIds { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Primitives that claimed an id, sharing <see cref="ValueIds"/>' id space.
+        /// </summary>
+        /// <remarks>
+        /// A separate dictionary rather than one keyed by a union of the two, so that the text
+        /// path keeps hashing plain strings. Values here can be long and are hashed once per
+        /// pass; the perf report records that a second hash of a 200-character value was
+        /// measurable, and widening the key would have made every text document pay for a
+        /// feature only primitive-bearing documents use.
+        /// </remarks>
+        internal Dictionary<PrimitiveNode, int> PrimitiveIds { get; } = [];
 
         /// <summary>
         /// Whether a value should claim an id, and so be emitted as <c>TEXT</c> rather than
@@ -524,6 +618,48 @@ public static class TlvEncoder
         /// therefore required.
         /// </remarks>
         internal bool ClaimsId(string value, int byteCount) =>
-            byteCount >= MinInternedValueLength && occurrences[value] > 1;
+            byteCount >= MinInternedValueLength && occurrences.Text[value] > 1;
+
+        /// <summary>
+        /// Whether a primitive should claim an id, and so be wrapped in <c>INTERN</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The exact break-even rather than text's rule of thumb, because a primitive's frame
+        /// size varies far more than a string's does. Over k occurrences of a frame costing F
+        /// bytes, claiming an id costs 2 for the wrapper and F for the first occurrence, then
+        /// R for each of the other k-1; not claiming costs kF. So it pays exactly when
+        /// (k-1)(F-R) &gt; 2.
+        /// </para>
+        /// <para>
+        /// R is taken as 3 — a type byte, a length byte and a one-byte id — which is what a
+        /// reference costs until the id space passes 127. Beyond that a reference costs one
+        /// byte more than assumed, so the rule stays conservative rather than becoming wrong:
+        /// it declines some values it could have claimed and claims none it should not.
+        /// </para>
+        /// </remarks>
+        internal bool ClaimsPrimitiveId(PrimitiveNode node)
+        {
+            if (!occurrences.Primitives.TryGetValue(node, out int seen))
+            {
+                // Filtered out of the counting pass as unable to pay. Absent, not zero — a
+                // lookup that assumed presence would throw on every small integer.
+                return false;
+            }
+
+            long frame = FrameSize(node.Type, node.Payload.Length);
+            return (seen - 1) * (frame - ReferenceCost) > 2;
+        }
+    }
+
+    /// <summary>
+    /// How often each distinct value occurs, gathered before the measuring pass.
+    /// </summary>
+    private sealed class Occurrences
+    {
+        internal Dictionary<string, int> Text { get; } = new(StringComparer.Ordinal);
+
+        internal Dictionary<PrimitiveNode, int> Primitives { get; } = [];
     }
 }
+

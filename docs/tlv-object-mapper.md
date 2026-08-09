@@ -424,19 +424,22 @@ The format's standing rule is that claims get measured, not asserted.
 
 Both come out of the measurement above, and neither is Phase B's to settle alone.
 
-### Should primitives be interned after all?
+### ~~Should primitives be interned after all?~~ Settled — yes, and built
 
-Phase A said no, and said to revisit for repeated GUIDs with a measurement. The measurement
-says a repeated `Guid` costs 6 B as interned text and 20 B as a `GUID` frame. The obvious fix
-is to let fixed-width primitives claim value ids under the same `ClaimsId` rule text uses — at
-least two bytes, and more than one occurrence — which would make a repeated `Guid` cost a
-three-byte reference and leave a unique one untouched.
+Repeated primitives now claim value ids through an `INTERN` wrapper (`0x0C`). The
+`identifiers` shape went from 28,962 bytes to 15,121, **47.8% smaller**, and documents whose
+primitives are all distinct are byte-for-byte unchanged.
 
-It is not free. The value table is currently keyed by `string`; admitting primitives means
-keying it by bytes, which changes hashing on the hot path for every document including ones
-with no primitives at all. It also needs a decision about whether a `Guid` and the text of that
-`Guid` are the same value — they are not, and conflating them would break byte-exact
-re-encoding.
+The cost was measured rather than assumed, on the axis this project tracks: encode allocation
+on `records`, whose primitives are all distinct, rose **59%**, because the counting pass was
+hashing 3,000 values that could never intern. Filtering it to values whose frame is larger
+than a reference cut that to **28%**. The residual is an occurrence table for 1,000 distinct
+doubles — the same cost the format already pays for 1,000 distinct strings — so it is accepted
+rather than capped, since a primitives-only cap would introduce an asymmetry text does not
+have. Timing is still unmeasured; the machine was at load 153.
+
+A `Guid` and the text spelling of that `Guid` remain different values, as they must for
+re-encoding to stay byte-exact.
 
 ### Should the mapper choose text or typed per value?
 
