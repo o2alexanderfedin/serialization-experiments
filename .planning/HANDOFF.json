@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-09T19:50:00Z",
+  "phase": null,
+  "phase_name": "TLV serialization experiment — arbitrary object support, phase A of D",
+  "phase_dir": ".planning",
+  "plan": null,
+  "task": null,
+  "total_tasks": 4,
+  "status": "paused",
+  "context": "default",
+  "context_ambiguity": "Not a GSD-structured project: no .planning/phases, spikes, sketches or deliberations. Work is conversational, and the design record lives in docs/ rather than .planning/. Handoff written to the default location.",
+  "head": "c59a313",
+  "branch": "develop",
+  "tree_state": "clean once this handoff is committed; main == develop, both pushed",
+  "completed_tasks": [
+    {"id": 1, "name": "Finding 1 — literals transcode through stack/ArrayPool instead of a byte[] each", "status": "done", "commit": "58f962b"},
+    {"id": 2, "name": "Finding 2 — output array allocated once at the measured length", "status": "done", "commit": "58f962b"},
+    {"id": 3, "name": "Finding 3 — nesting depth bounded on both sides by TlvLimits.MaxDepth", "status": "done", "commit": "9d3dfa6"},
+    {"id": 4, "name": "Perf report corrected: stale evidence called out, deterministic alloc instrument added", "status": "done", "commit": "a2331ec"},
+    {"id": 5, "name": "Selective interning via TEXT_ONCE (0x04)", "status": "done", "commit": "bf8989d"},
+    {"id": 6, "name": "Optional polymorphic type tags via TYPED (0x05)", "status": "done", "commit": "fd520a9"},
+    {"id": 7, "name": "Canonical varints; dead constructor removed; reachable error paths covered", "status": "done", "commit": "d58bfa2"},
+    {"id": 8, "name": "Polymorphism wired into the benchmarks; CountValues double-hashing removed", "status": "done", "commit": "90e6c9d"},
+    {"id": 9, "name": "Value-id desync bug found by fuzzing; invariant pinned", "status": "done", "commit": "c55a0a1"},
+    {"id": 10, "name": "Phase A design: primitive type codes and the shape nibble", "status": "done", "commit": "f9ee386"},
+    {"id": 11, "name": "Phase A implemented and promoted: 9 typed codes on the wire", "status": "done", "commit": "b39374c"},
+    {"id": 12, "name": "Accessor coverage restored to 97.1% line / 95.6% branch", "status": "done", "commit": "c59a313"}
+  ],
+  "remaining_tasks": [
+    {"id": 13, "name": "Phase B — object mapper, self-describing: POCO to Node by property name, collections, null, a FIELD frame with no Length", "status": "not_started", "kind": "design_then_build", "depends_on": "A (done)", "note": "Design decision still open: reflection versus source generator. MemoryPack and System.Text.Json in .NET 10 both went source-generated for AOT and trimming."},
+    {"id": 14, "name": "Phase C — ordinals opt-in: a contract assigning numbers, shape nibble folded into the field tag protobuf-style", "status": "not_started", "kind": "design_then_build", "depends_on": "B"},
+    {"id": 15, "name": "Phase D — identity and cycles: reference preservation, two-phase construction, amplification budget", "status": "not_started", "kind": "optional", "depends_on": "B"},
+    {"id": 16, "name": "Timings re-run on an unloaded machine", "status": "not_started", "kind": "measurement", "note": "Every timing taken on 2026-08-08 is contaminated: the box sat at load 51-75 from an unrelated C++ build. Sizes and allocations are exact and unaffected."},
+    {"id": 17, "name": "The emit pass's second Tables, now the largest remaining allocation", "status": "not_started", "kind": "measurable_idea", "note": "Inherent to the two-pass design rather than incidental to it."},
+    {"id": 18, "name": "Implement the allocated-but-unemitted type codes if something measures a need", "status": "not_started", "kind": "deferred", "note": "Fixed-width ints, F16, TIMESTAMP, DECIMAL, SHA256, SHA512, BIGINT. Codes are allocated so a later phase cannot contradict them."}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Choose whether Phase B's mapper is reflection-based or source-generated", "context": "Reflection is simpler and works with types unknown at compile time; source generation is what MemoryPack and System.Text.Json use, and is required for Native AOT and trimming. Note the distinction already drawn: reading a known type's properties is fine, resolving an attacker-supplied name to a type is not, and the codec still never does the latter.", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Type byte splits into a shape nibble and a type nibble", "rationale": "The high nibble says how to skip a frame, so a fixed-width value needs no Length and an unknown type is still skippable. Dropping Length without it would cost the property that makes unknown frames survive."},
+    {"decision": "Shapes 0xB_ to 0xE_ can never be allocated", "rationale": "They carry no width, so a reader written today could not skip them. Allocating them later would be exactly the ossification the split exists to prevent."},
+    {"decision": "Unknown types are preserved, not rejected", "rationale": "The shape says how far the frame reaches, so it decodes opaque and re-encodes byte-for-byte. Matches what TYPED already did for unknown type names; RFC 8949 5.4 makes the same point about unknown CBOR tags."},
+    {"decision": "A schema mode must never drop the type byte, only fold the shape into the field tag", "rationale": "Dropping it drops the shape, and an unknown field stops being something a reader steps over and becomes something that silently desynchronises the rest. Protobuf carries three bits of wire type in its tag for this reason. User directive: stay on the safe side."},
+    {"decision": "The codec never maps a type name to a System.Type", "rationale": "BinaryFormatter was removed from .NET 9 over this. Avro shipped three versions of one allow-list before it held, and MessagePack-CSharp's failed to recurse into generic arguments. A decoder with no code path that constructs cannot be argued into constructing."},
+    {"decision": "Only the shortest varint encoding is legal, and values must fit in 64 bits", "rationale": "Otherwise a document has more than one valid byte representation: re-encoding stops being byte-exact, and where bytes are hashed or signed it is the BER/DER signature-bypass shape."},
+    {"decision": "NaN is canonicalised per width; negative zero is preserved", "rationale": "Every NaN payload would otherwise be a separate encoding of one value. -0.0 is a different value, not a different spelling, since 1/-0.0 is negative infinity."},
+    {"decision": "TEXT_ONCE kept after measurement, having first been reverted", "rationale": "Costs an extra traversal and about 2x encode time on long repeated text, but saves 196 bytes on values-mixed and cuts encode allocation 28-68% on four shapes. The allocation half was missed in the first recommendation and surfaced only when the revert was measured."},
+    {"decision": "Every TEXT frame claims a value id, counted by literal rather than by distinct value", "rationale": "The decoder appends one entry per literal. Counting distinct values instead stalls on the second literal of a short value and every later id lands one out — a fault that leaves the document well-formed and silently resolves references to the wrong string."},
+    {"decision": "Primitives are not interned", "rationale": "A reference costs three bytes and a small integer costs two, so it could only lose. Revisit only for repeated GUIDs or hashes, and only with a measurement."},
+    {"decision": "PrimitiveKind is public; TlvType stays internal", "rationale": "The prototype exposed a public raw Type byte with an internal vocabulary, so no caller outside the assembly could read a value. Callers switch on meaning, not on a wire detail."},
+    {"decision": "Solo git-flow, no pull requests; main fast-forwarded to develop, no version tags", "rationale": "User works alone. Local hooks block direct commits on main and develop, so every change needs a feature branch."}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Nothing is in flight. Phase B is the natural next step and needs a design before any code — the open question is reflection versus source generation. Do not start it without the user asking.",
+  "context_notes": "The working loop: settle a format question in conversation, write the reasoning into docs/, implement against the doc, measure with the exact instruments, then fold findings back into docs/tlv-performance.md. Docs lead code, and when measurement contradicts a doc the doc gets corrected — that has now happened four times and every correction was worth it. Verification is not optional here: checking has found a real defect every single time it was applied, including two this session that no existing test caught."
+}
