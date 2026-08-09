@@ -310,6 +310,57 @@ public sealed class PrimitiveTypeTests
     }
 
     [Fact]
+    public void Booleans_and_null_read_back_through_the_accessors()
+    {
+        Assert.True(RoundTrip(Primitives.Bool(true)).AsBool());
+        Assert.False(RoundTrip(Primitives.Bool(false)).AsBool());
+        Assert.True(RoundTrip(Primitives.Null()).IsNull());
+        Assert.False(RoundTrip(Primitives.Bool(false)).IsNull());
+    }
+
+    [Fact]
+    public void Every_kind_reports_itself()
+    {
+        Assert.Equal(PrimitiveKind.Null, Primitives.Null().KindOf());
+        Assert.Equal(PrimitiveKind.Boolean, Primitives.Bool(true).KindOf());
+        Assert.Equal(PrimitiveKind.Boolean, Primitives.Bool(false).KindOf());
+        Assert.Equal(PrimitiveKind.SignedInteger, Primitives.Int(1).KindOf());
+        Assert.Equal(PrimitiveKind.UnsignedInteger, Primitives.UInt(1).KindOf());
+        Assert.Equal(PrimitiveKind.Single, Primitives.Float(1).KindOf());
+        Assert.Equal(PrimitiveKind.Double, Primitives.Double(1).KindOf());
+        Assert.Equal(PrimitiveKind.Guid, Primitives.Guid(System.Guid.Empty).KindOf());
+        Assert.Equal(PrimitiveKind.Bytes, Primitives.Bytes([1]).KindOf());
+    }
+
+    [Fact]
+    public void Reading_a_value_as_the_wrong_type_is_refused()
+    {
+        // The accessors are the one place a caller can be wrong about what it holds, so they
+        // say so rather than reinterpreting the bytes — a double read as an integer would
+        // otherwise return whatever its first varint byte happened to spell.
+        PrimitiveNode number = Primitives.Double(1.5);
+
+        Assert.Throws<InvalidOperationException>(() => number.AsInt());
+        Assert.Throws<InvalidOperationException>(() => number.AsUInt());
+        Assert.Throws<InvalidOperationException>(() => number.AsBool());
+        Assert.Throws<InvalidOperationException>(() => number.AsFloat());
+        Assert.Throws<InvalidOperationException>(() => number.AsGuid());
+        Assert.Throws<InvalidOperationException>(() => Primitives.Int(1).AsDouble());
+        Assert.Throws<InvalidOperationException>(() => Primitives.Int(1).AsBytes().ToArray());
+    }
+
+    [Fact]
+    public void A_non_canonical_binary32_NaN_on_the_wire_is_rejected()
+    {
+        // The binary64 case has its own test; this is the narrower width, where the quiet bit
+        // sits in a different place and an off-by-one mask would slip through.
+        byte[] malformed = [TlvType.Float32, 0x01, 0x00, 0xC0, 0x7F];
+
+        TlvFormatException error = Assert.Throws<TlvFormatException>(() => TlvDecoder.Decode(malformed));
+        Assert.Contains("Non-canonical binary32", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Every_known_value_type_can_be_classified()
     {
         // TlvType.IsKnown and Primitives.KindOf each list the types they recognise, in
