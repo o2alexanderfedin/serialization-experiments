@@ -297,6 +297,74 @@ public sealed class ValueInterningTests
     }
 
     [Fact]
+    public void A_repeated_unreferenceable_value_does_not_desynchronise_the_id_tables()
+    {
+        // "x" is below the length threshold, so it is written as a literal both times and
+        // then "ab" is referenced. The two sides have to agree on which id that reference
+        // means. Nothing here is malformed and every length is correct, so a mismatch shows
+        // up only as a reference quietly resolving to the wrong string.
+        //
+        // Worth pinning because the obvious alternative design gets it wrong: if literals
+        // below the threshold claimed ids on the decoder's side but not the encoder's — which
+        // is what happens when the encoder numbers ids by counting *distinct* values — this
+        // document decodes as x, x, ab, x. Randomised round-trips found that; TEXT_ONCE
+        // avoids it by construction, because a value that will not be referenced claims
+        // nothing on either side.
+        Node tree = Element(
+            "root",
+            Element("a", Text("x")),
+            Element("b", Text("x")),
+            Element("c", Text("ab")),
+            Element("d", Text("ab")));
+
+        Assert.Equal(Render(tree), Render(TlvDecoder.Decode(TlvEncoder.Encode(tree))));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(7)]
+    public void Ids_stay_in_step_however_many_short_values_precede_a_reference(int shortRepeats)
+    {
+        // The same fault generalised: under a design where the tables can drift, each extra
+        // unreferenceable literal pushes them one further apart.
+        List<Node> children = [];
+        for (int index = 0; index < shortRepeats; index++)
+        {
+            children.Add(Element("s", Text("q")));
+        }
+
+        children.Add(Element("a", Text("long-enough")));
+        children.Add(Element("b", Text("long-enough")));
+
+        Node tree = new ElementNode("root", children);
+
+        Assert.Equal(Render(tree), Render(TlvDecoder.Decode(TlvEncoder.Encode(tree))));
+    }
+
+    [Fact]
+    public void Exactly_the_literals_that_claim_ids_are_the_ones_the_decoder_registers()
+    {
+        // The invariant the two tests above depend on, stated directly: TEXT frames claim
+        // ids and TEXT_ONCE frames do not, so counting one is counting the other.
+        Node tree = Element(
+            "root",
+            Element("a", Text("x")),            // too short: TEXT_ONCE
+            Element("b", Text("x")),            // too short: TEXT_ONCE
+            Element("c", Text("ab")),           // repeats and long enough: TEXT
+            Element("d", Text("ab")),           // TEXT_REF
+            Element("e", Text("solo-value")));  // never repeats: TEXT_ONCE
+
+        List<byte> types = Frames.TypeCodes(TlvEncoder.Encode(tree));
+
+        Assert.Equal(1, types.Count(type => type == TextLiteral));
+        Assert.Equal(1, types.Count(type => type == TextRef));
+        Assert.Equal(3, types.Count(type => type == TextOnce));
+        Assert.Equal(Render(tree), Render(TlvDecoder.Decode(TlvEncoder.Encode(tree))));
+    }
+
+    [Fact]
     public void A_repeated_one_byte_value_claims_no_id_either()
     {
         // Repetition alone is not enough: (k-1)(L-1) is zero at L=1, so an id would be spent

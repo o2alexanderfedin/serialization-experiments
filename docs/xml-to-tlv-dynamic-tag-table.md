@@ -65,6 +65,14 @@ Byte-for-byte the same layout. The only difference is the id table: `TEXT` assig
 value id, `TEXT_ONCE` assigns nothing. A decoder needs no other rule to keep its table in
 step with the encoder's.
 
+That equivalence is load-bearing, and not only for compression. Because the decoder appends
+an entry for every `TEXT` frame it reads, the encoder must claim an id for exactly those
+frames and no others. Splitting the two — emitting a literal that the decoder registers but
+the encoder does not count — leaves every later id off by one, and the symptom is not a
+parse error: the document stays well-formed, every length still checks out, and a reference
+quietly resolves to the wrong string. Randomised round-trips caught that in a variant of
+this design; nothing else did.
+
 ### `TEXT_REF` value
 
 | Order | Field | Size | Notes |
