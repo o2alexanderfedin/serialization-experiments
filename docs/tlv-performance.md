@@ -343,11 +343,105 @@ should know it is a property of the data, not of the format.
 `f32` is the lever where precision allows — five bytes against nine, and it beats almost any
 decimal spelling.
 
+## Against other formats
+
+Every measurement above this line compares TLV against a different version of TLV. That says
+whether the last change helped and nothing about whether the format is worth building, so
+`-- compare` supplies the reference points: a self-describing peer, a schema-driven one, the
+format everyone actually uses, and deflate chained onto each.
+
+Four value profiles, 1,000 records each, exact bytes. Interning on, primitive interning
+included.
+
+**Raw**
+
+| Profile | TLV | JSON | MsgPack | protobuf |
+|---|---:|---:|---:|---:|
+| repeated-guid | **40,928** | 128,044 | 65,003 | 46,694 |
+| distinct-guid | 61,024 | 143,620 | 66,619 | **49,173** |
+| high-entropy | 63,070 | 148,743 | 68,999 | **50,944** |
+| low-entropy | 36,093 | 126,501 | 64,503 | **28,300** |
+
+**Deflate, `CompressionLevel.Optimal`**
+
+| Profile | TLV | JSON | MsgPack | protobuf |
+|---|---:|---:|---:|---:|
+| repeated-guid | 6,733 | **5,837** | 7,560 | 6,969 |
+| distinct-guid | **21,090** | 29,701 | 25,463 | 22,919 |
+| high-entropy | **23,574** | 34,244 | 27,696 | 24,485 |
+| low-entropy | 480 | 1,210 | **480** | 297 |
+
+### What this says
+
+**TLV beats MessagePack on every profile**, by 8–44%. That is the fair comparison: both are
+self-describing, both carry field identity on the wire, neither needs a schema.
+
+**TLV loses to protobuf on three of four**, by 24–28%, and wins the fourth outright by 12%.
+The gap is field naming, and it is arithmetic rather than mystery: TLV spends a type byte, a
+length and a name reference on each field where protobuf spends a one-byte tag. Two bytes ×
+6 fields × 1,000 records is 12,000 bytes — the whole of the 11,851-byte gap on `distinct-guid`,
+to within rounding. **That is precisely what phase C removes**, so the roadmap is pointed at
+the right thing, and phase C is worth more in bytes than phase B, which buys expressiveness.
+
+**Deflate changes the ranking.** TLV+deflate wins the two high-entropy profiles and loses the
+two low-entropy ones, where JSON+deflate and protobuf+deflate do better. Anything shipping
+this format over a network should compress it, and no one should quote an uncompressed
+comparison as though it settled anything.
+
+**Deflate does not subsume interning**, which was the sharpest version of the question — the
+tables are a hand-maintained dictionary compressor and zlib is a well-tuned one. Turning all
+interning off and deflating anyway costs 0.7% on `repeated-guid`, 4.7% on `high-entropy`, 5.4%
+on `distinct-guid` and **40% on `low-entropy`** (480 bytes against 801). So the tables do work
+zlib does not replicate — far less than they appear to do uncompressed, and nowhere near
+nothing.
+
+### Interning × typed values
+
+Neither mechanism dominates; each covers what the other cannot.
+
+| | typed, interned | typed, no interning | text, interned | text, no interning |
+|---|---:|---:|---:|---:|
+| repeated-guid | **40,928** | 64,416 | 51,614 | 96,100 |
+| distinct-guid | **61,024** | 64,992 | 104,381 | 111,676 |
+| high-entropy | **63,070** | 67,038 | 109,338 | 116,799 |
+| low-entropy | **36,093** | 63,556 | 39,116 | 94,557 |
+
+The no-interning arm disables both tables, by patching the text threshold and the reference
+cost together and asserting each patch applied before trusting a number from it. Its figures
+are identical to the build from before `INTERN` existed, which is the check that the feature
+adds nothing when switched off.
+
+Interning never loses — 5.5% to 59% — so it stays on unconditionally. Typed values win on
+high-cardinality data and lost badly on repeated identifiers until primitives became
+internable; with `INTERN` in place the combined column wins every profile.
+
+### What primitive interning cost
+
+Reported because a size win quoted without its allocation is how this project produced a
+recommendation it had to reverse.
+
+| | before | after |
+|---|---:|---:|
+| `identifiers`/1000, bytes | 28,962 | **15,121** |
+| `records`/1000, encode allocation | 365,344 | **467,688** |
+| every other shape, allocation | — | +208 B flat |
+
+`records` has 1,000 distinct doubles and gains nothing from interning, so its 28% allocation
+rise is pure cost. A first attempt was 59%; filtering the counting pass to values whose frame
+exceeds a reference removed the values that could never pay. What remains is an occurrence
+table for distinct primitives, which is the same cost already paid for distinct text.
+
+**Timing is unmeasured.** The machine was at load 153 throughout, well past the 51–75 that
+already contaminated one day's numbers here. Sizes and allocations are exact and
+load-independent; durations are not.
+
 ## Not yet measured
 
 - Two-pass against a buffer-and-copy encoder, which would quantify the memory win directly
   rather than inferring it.
-- Deflate chained onto the output, and its interaction with skipping.
+- What `INTERN` costs in time, and whether the extra dictionary shows up at all next to the
+  hashing already done for text.
+- Deflate's interaction with skipping.
 - Documents large enough for the size cache (one `long` per node) to matter.
 - Timings re-run without `--job short`, now that the allocation question is settled and only
   the durations remain unreliable.
