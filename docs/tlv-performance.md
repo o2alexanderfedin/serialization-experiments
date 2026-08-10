@@ -576,6 +576,167 @@ Recorded because both produced plausible, publishable, wrong tables.
   `Node` tree, which no other format had to do. Worth ~190 µs — small next to the tiering bug,
   and enough to matter against MessagePack's 78 µs.
 
+## Re-evaluated for the internet and WebRTC — `-- network`
+
+Every timing above is a local CPU measurement. Once the bytes cross a network the question
+changes, and the answer inverts most of the ranking.
+
+**Measured inputs, modelled network.** Size and codec time are measured. Round-trip time,
+bandwidth and loss are parameters — no network is involved in this process. Ratios are
+findings; absolute milliseconds are illustration.
+
+Two constants come from the specification. [RFC 8831](https://www.rfc-editor.org/info/rfc8831/)
+§6.6 recommends a user message stay at or below **16 KiB**, and a safe SCTP payload that avoids
+IP fragmentation is about **1192 bytes** once DTLS, SCTP and UDP/IP headers come off a
+1280-byte path MTU.
+
+### Codec speed is not the point
+
+| Link | RTT | TLV CPU | fastest CPU | TLV share of end-to-end |
+|---|---:|---:|---:|---:|
+| same-metro fibre | 10 ms | 0.384 ms | 0.021 ms | 3.5% |
+| intercontinental | 180 ms | 0.145 ms | 0.017 ms | **0.1%** |
+| mobile 4G | 70 ms | 0.150 ms | 0.012 ms | **0.2%** |
+
+TLV's 13× encode disadvantage is worth **0.1 ms**. On an intercontinental link the entire
+codec cost — encode plus decode — is a tenth of a percent of the end-to-end latency. The 170 ms
+of propagation does not care which serializer produced the bytes.
+
+What survives is **size**, because size is time on the wire. On mobile 4G a 100-record message
+takes 10.2 ms to transmit as TLV and 38.0 ms as XML. That difference is 190× larger than the
+entire CPU difference between them.
+
+### Message size is where TLV loses, and it is the WebRTC case
+
+Bytes for the same records at four batch sizes:
+
+| Format | 1 rec | 10 rec | 100 rec | 1,000 rec |
+|---|---:|---:|---:|---:|
+| **TLV** | **118** | **705** | **6,369** | **63,070** |
+| CBOR | 86 | 886 | 8,898 | 88,999 |
+| MessagePack | 87 | 896 | 8,999 | 89,999 |
+| JSON | 143 | 1,465 | 14,760 | 148,743 |
+| XML | 400 | 2,514 | 23,729 | 236,912 |
+| protobuf | 27 | 475 | 5,044 | 50,944 |
+
+**At one record TLV is bigger than CBOR and MessagePack.** It only wins from about three
+records up. The reason is arithmetic on those measurements: TLV's marginal cost is **62.9 bytes
+per record**, and a one-record message costs 118, so roughly **55 bytes is fixed overhead** —
+the field-name table, paid in full on every message.
+
+For a single-record message that is **47% of the payload spent on names the peer already has.**
+At ten records it is 10%; by a thousand it has vanished.
+
+This matters because WebRTC data channels carry small frequent messages — a game tick, a
+cursor position, a telemetry sample — not thousand-record batches. Every batch measured here
+exceeds RFC 8831's 16 KiB recommendation, so a real deployment splits them and lands squarely
+in the size range where TLV's fixed cost dominates.
+
+### The consequence: a session-scoped name table
+
+The mapper's per-type work — the reflection scan, the accessor compilation — happens **once per
+type** and amortizes to nothing. The same is true of the *names themselves*, and the format
+currently does not exploit it: the name table is rebuilt from empty in every message, because
+interning is scoped to a document.
+
+A data channel is a long-lived connection. The peer that receives the second message already
+has the table from the first. Sending the table once when the channel opens, and referencing it
+thereafter, would take a one-record message from 118 bytes to about **63** — past CBOR's 86 and
+MessagePack's 87, and toward protobuf's 27 **without requiring a compile-time schema**.
+
+That is phase C's benefit obtained dynamically, and it is a better fit for this transport than
+phase C is: ordinals need both peers to share a contract in advance, whereas a session
+dictionary negotiates itself from the first message. It needs a design — table lifetime, what
+happens when a message is lost on an unreliable channel, and how a receiver signals it has no
+table — and the wire-format note already lists table lifetime as an open decision.
+
+### Where CPU does matter
+
+Latency hides codec cost. Throughput does not.
+
+| Format | Encode+decode | Messages/s/core | Mbps to saturate |
+|---|---:|---:|---:|
+| MessagePack (array) | 0.012 ms | 84,745 | 3,321 |
+| MessagePack | 0.021 ms | 47,548 | 3,423 |
+| protobuf | 0.027 ms | 37,456 | 1,511 |
+| CBOR | 0.053 ms | 18,882 | 1,344 |
+| **TLV** | 0.146 ms | **6,859** | 349 |
+| XML | 0.160 ms | 6,262 | 1,189 |
+
+One core encoding TLV sustains 6,859 messages a second and needs only 349 Mbps to carry them —
+so **a single core saturates a gigabit link with any format here**, and a single peer connection
+never comes close. CPU becomes the constraint only for a server fanning out to thousands of
+peers, and there TLV costs 12× MessagePack in cores.
+
+### RPC over WebRTC — the case that inverts the recommendation
+
+RPC narrows all of the above to one column, and the answer changes.
+
+An RPC message is a method identifier plus a few arguments, or a single return value. That is
+the **1-record** column, not the 1,000-record one. Three consequences follow, and the third is
+the important one.
+
+**1. Every format is one packet, so latency is identical.** At one record the largest payload
+measured is XML's 400 bytes, and the safe SCTP payload is 1192. Every format fits in a single
+packet:
+
+| Format | 1-record bytes | Packets | Latency |
+|---|---:|---:|---|
+| protobuf | 27 | 1 | 1 RTT |
+| CBOR | 86 | 1 | 1 RTT |
+| MessagePack | 87 | 1 | 1 RTT |
+| **TLV** | **118** | **1** | 1 RTT |
+| JSON | 143 | 1 | 1 RTT |
+| XML | 400 | 1 | 1 RTT |
+
+**For small RPC calls, format choice changes neither packet count nor round trips.** Per-call
+latency is the RTT, whatever the encoding — a 15× size difference between protobuf and XML buys
+exactly nothing in latency. The size differences show up as aggregate bandwidth, not as
+responsiveness: at 1,000 calls/second, TLV is 0.94 Mbps and XML 3.2 Mbps.
+
+**2. TLV is at its weakest here.** At one record it is the *largest of the binary formats* —
+118 bytes against CBOR's 86 and protobuf's 27 — because the fixed name-table cost is paid in
+full on a message with nothing to amortize it over. Every previous table in this document
+measured TLV at its best; RPC measures it at its worst.
+
+**3. RPC has a schema by construction, so the names should not be on the wire at all.** TLV
+carries field names to be readable by a party that has never seen the schema. An RPC client and
+server compile against the same interface definition — that is what makes it RPC. The property
+the names buy is one the transport does not need.
+
+That reverses the roadmap priority. Phase C's ordinals were the plan for *bytes*; here they are
+the plan for *fitness*, because the objection to ordinals — that the reader must already have
+the contract — is satisfied by definition. And it is worth far more at RPC scale than the
+matchup suggested: on a 1-record message the field names are ~47% of the payload, against ~19%
+of a 1,000-record batch.
+
+The session-scoped name table remains the fallback for the case where the peers genuinely do
+not share a contract, and it composes with ordinals rather than competing: the table is what a
+dynamic peer negotiates, the contract is what a compiled one already has.
+
+**One transport caveat that outranks all of this.** On a reliable ordered data channel, a lost
+packet stalls every call behind it — head-of-line blocking across independent RPCs, which
+[RFC 8260 message interleaving addresses only between streams](https://pion.ly/blog/sctp-interleaving/).
+Keeping each call inside one packet is what avoids intra-message stalls, and every format here
+already does that. Putting independent calls on separate streams matters more for tail latency
+than any format choice measured in this document.
+
+### The summary that changes
+
+- **For one peer over the internet: codec speed is irrelevant** (0.1% of latency) and size is
+  what matters. TLV wins on messages above ~3 records and loses below.
+- **For small frequent messages — the WebRTC norm — TLV's fixed name-table cost is its real
+  problem**, not its encode speed. A session-scoped table is the fix, and it is worth more here
+  than either remaining roadmap phase.
+- **For server fanout: codec speed is the whole cost**, and TLV is the second-slowest measured.
+- **If the link is compressible, compress.** Brotli takes a 1,000-record TLV batch from 53
+  packets to 19, and an XML one from 199 to 28 — which compresses away most of the format
+  difference that the raw tables make look decisive.
+- **For RPC over WebRTC: latency is identical across every format**, because a call fits in one
+  packet either way. TLV is the largest binary format at that size, and the fix — dropping
+  names the two peers already share — is phase C, whose one precondition RPC satisfies for
+  free.
+
 ## Not yet measured
 
 - Two-pass against a buffer-and-copy encoder, which would quantify the memory win directly

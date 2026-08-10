@@ -48,6 +48,12 @@ public static class Program
             return;
         }
 
+        if (args is ["network", ..])
+        {
+            Network.Report();
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(Assembly.GetExecutingAssembly()).Run(args);
     }
 }
