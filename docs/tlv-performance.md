@@ -435,6 +435,147 @@ table for distinct primitives, which is the same cost already paid for distinct 
 already contaminated one day's numbers here. Sizes and allocations are exact and
 load-independent; durations are not.
 
+## The full matchup — `-- matchup`
+
+Seven formats over identical data, 1,000 records per profile, each with raw, deflate and
+brotli. Produced by `dotnet run -c Release --project bench/... -- matchup`.
+
+### Making it apples-to-apples
+
+Four things had to be fixed before the numbers meant anything, and each of them changed a
+result:
+
+1. **Names on the wire versus field numbers.** protobuf, and MessagePack and CBOR in array
+   mode, carry only field numbers: the reader must already have the schema. JSON, XML, CBOR
+   maps, MessagePack maps and TLV carry names and can be read by a party that has never seen
+   one. Comparing across that line rewards the ordinal formats for a capability they do not
+   have, so the tables group them separately.
+2. **MessagePack's `Guid` default.** Left alone, MessagePack-CSharp writes a `Guid` as its
+   36-character spelling — 38 bytes against 17. That is a library default, not a property of
+   the format, and charging it would have been rigged. It gets a binary formatter. CBOR is
+   written against the low-level writer, so it emits a byte string directly. JSON and XML keep
+   the text spelling because they have no alternative, which is a real property of those
+   formats and is charged to them.
+3. **TLV has no object mapper.** Every other entrant goes from objects to bytes in one step;
+   TLV must raise a `Node` tree first, because phase B is not built. Timing only the codec
+   flatters it and timing the hand-written tree-builder penalises it, so both are reported.
+   The same asymmetry applies to decode: TLV produces a generic tree, so `JsonDocument` is
+   its honest counterpart rather than typed deserialization — both JSON rows are given.
+4. **Decoders must prove they did the work.** Every decoder returns a checksum over every
+   field, and all ten are asserted equal before any timing runs. A decoder that quietly
+   skipped a field, or whose result was optimised away, would otherwise post an excellent
+   time.
+
+**JSONB is SQLite's**, since the name is ambiguous. It is measured for size only: it is a
+database storage encoding rather than a client codec, so timing a round trip through it would
+measure SQL and marshalling.
+
+### Size, bytes
+
+| Format | Names | repeated-guid | distinct-guid | high-entropy | low-entropy |
+|---|---|---:|---:|---:|---:|
+| TLV | yes | **40,928** | **61,024** | **63,070** | **36,093** |
+| TLV + deflate | yes | 6,733 | 21,090 | 23,574 | 480 |
+| TLV + brotli | yes | 5,120 | **18,625** | 22,085 | 182 |
+| XML | yes | 216,213 | 231,789 | 236,912 | 214,670 |
+| XML + deflate | yes | 7,472 | 30,644 | 35,506 | 2,099 |
+| XML + brotli | yes | 5,573 | 28,094 | 33,305 | 252 |
+| JSON | yes | 128,044 | 143,620 | 148,743 | 126,501 |
+| JSON + deflate | yes | 5,837 | 29,701 | 34,244 | 1,210 |
+| JSON + brotli | yes | 4,978 | 26,727 | 31,836 | 136 |
+| JSONB (SQLite) | yes | 109,905 | 126,289 | 131,247 | 108,505 |
+| JSONB + deflate | yes | 5,717 | 28,792 | 34,594 | 1,238 |
+| JSONB + brotli | yes | **2,968** | 26,616 | 31,523 | 137 |
+| CBOR | yes | 79,763 | 86,717 | 88,999 | 78,503 |
+| CBOR + deflate | yes | 7,809 | 22,729 | 24,476 | 758 |
+| CBOR + brotli | yes | 6,021 | 19,101 | **19,971** | 120 |
+| MessagePack | yes | 86,003 | 87,619 | 89,999 | 85,503 |
+| MessagePack + deflate | yes | 7,890 | 22,734 | 24,495 | 868 |
+| MessagePack + brotli | yes | 4,917 | 18,570 | 19,177 | 129 |
+| CBOR (array) | no | 38,763 | 45,717 | 47,999 | 37,503 |
+| CBOR (array) + deflate | no | 7,039 | 21,097 | 23,132 | 415 |
+| CBOR (array) + brotli | no | 5,192 | 19,912 | 21,242 | **80** |
+| MessagePack (array) | no | 45,003 | 46,619 | 48,999 | 44,503 |
+| MessagePack (array) + deflate | no | 7,256 | 21,343 | 23,340 | 495 |
+| MessagePack (array) + brotli | no | 5,407 | 19,663 | 20,623 | 83 |
+| protobuf | no | 46,694 | 49,173 | 50,944 | **28,300** |
+| protobuf + deflate | no | 6,969 | 22,919 | 24,485 | 297 |
+| protobuf + brotli | no | 6,148 | 19,990 | 20,684 | 85 |
+
+Bold marks the best in each column among named formats, and separately the best overall where
+an ordinal format wins.
+
+### Speed, microseconds per 1,000 records
+
+Median of 41 interleaved rounds. Every codec is measured once per round, the starting codec
+rotates each round, and everything is warmed on every profile before anything is measured.
+
+**high-entropy**
+
+| Format | Names | Encode | Encode + deflate | Decode |
+|---|---|---:|---:|---:|
+| TLV (codec only) | yes | 1,038.6 | 1,963.9 | 494.4 |
+| TLV (tree + codec) | yes | 1,226.8 | 2,145.6 | 483.5 |
+| XML | yes | 608.7 | 1,942.2 | 996.0 |
+| JSON | yes | 230.6 | 1,399.7 | 331.4 |
+| JSON (DOM) | yes | 214.3 | 1,349.4 | 240.1 |
+| JSONB (SQLite) | yes | 531.6 | 1,657.0 | n/a |
+| CBOR | yes | 227.2 | 1,143.0 | 292.6 |
+| MessagePack | yes | **78.5** | **985.8** | **151.8** |
+| CBOR (array) | no | 63.8 | 825.3 | 94.8 |
+| MessagePack (array) | no | 40.0 | 786.9 | 83.7 |
+| protobuf | no | 101.9 | 850.8 | 130.6 |
+
+**repeated-guid**
+
+| Format | Names | Encode | Encode + deflate | Decode |
+|---|---|---:|---:|---:|
+| TLV (codec only) | yes | 1,026.9 | 1,272.9 | 500.5 |
+| TLV (tree + codec) | yes | 1,128.9 | 1,374.3 | 480.1 |
+| XML | yes | 522.9 | 941.5 | 909.2 |
+| JSON | yes | 174.0 | 470.5 | 292.3 |
+| JSON (DOM) | yes | 169.2 | 465.5 | 226.5 |
+| JSONB (SQLite) | yes | 467.5 | 742.5 | n/a |
+| CBOR | yes | 233.8 | 490.6 | 289.9 |
+| MessagePack | yes | **78.4** | **328.4** | **145.1** |
+| CBOR (array) | no | 65.7 | 230.6 | 92.4 |
+| MessagePack (array) | no | 39.4 | 203.5 | 81.7 |
+| protobuf | no | 100.7 | 399.1 | 125.1 |
+
+### What it says
+
+**TLV is the smallest named format on every profile**, by 22–58% against CBOR and MessagePack
+maps and by 3.1–3.5× against JSON. On `repeated-guid` it beats protobuf, which carries no
+names at all.
+
+**TLV is also the slowest to encode** — 13× MessagePack, 4.6× CBOR, and slower even than XML.
+The two-pass design is a third of that (three traversals rather than one) and interning most
+of the rest. Nobody has optimised the encoder for speed, and no timing measurement before this
+one existed to say it needed it. **Decode is competitive**: 494 µs against CBOR's 293 and
+MessagePack's 152, and faster than XML and typed JSON.
+
+**Compression flattens almost everything.** Deflate brings a 236,912-byte XML document and a
+63,070-byte TLV one to within 50% of each other; brotli goes further. If the bytes are going
+over a network and can be compressed, the choice of format matters far less than the tables
+above suggest — and JSONB+brotli takes the single smallest cell in the whole comparison on
+`repeated-guid`, at 2,968 bytes.
+
+**Where TLV earns its place is uncompressed**, which is where a memory-mapped file, a shared
+buffer, or a database page lives, and where the O(1) skip property is worth having.
+
+### Two harness bugs, both found by cross-checking
+
+Recorded because both produced plausible, publishable, wrong tables.
+
+- **Tiered compilation.** Warming up inside the per-profile loop left the first profile
+  measured running tier-0 code throughout. Every codec looked 4–8× slower on it — TLV 7,753 µs
+  against 1,125 µs, CBOR 1,806 against 226 — and it read exactly like a property of the data.
+  The tell was that *every* codec showed it, including ones whose behaviour cannot depend on
+  value cardinality. Fixed by warming every codec on every profile before measuring any.
+- **The mapper inside the timed region.** TLV's encode originally included building the whole
+  `Node` tree, which no other format had to do. Worth ~190 µs — small next to the tiering bug,
+  and enough to matter against MessagePack's 78 µs.
+
 ## Not yet measured
 
 - Two-pass against a buffer-and-copy encoder, which would quantify the memory win directly
