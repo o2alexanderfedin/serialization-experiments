@@ -680,14 +680,25 @@ the important one.
 measured is XML's 400 bytes, and the safe SCTP payload is 1192. Every format fits in a single
 packet:
 
-| Format | 1-record bytes | Packets | Latency |
+| Format | 1 typical record | Packets | Latency |
 |---|---:|---:|---|
-| protobuf | 27 | 1 | 1 RTT |
-| CBOR | 86 | 1 | 1 RTT |
-| MessagePack | 87 | 1 | 1 RTT |
-| **TLV** | **118** | **1** | 1 RTT |
-| JSON | 143 | 1 | 1 RTT |
-| XML | 400 | 1 | 1 RTT |
+| CBOR (array) | 49 | 1 | 1 RTT |
+| MessagePack (array) | 50 | 1 | 1 RTT |
+| protobuf | 52 | 1 | 1 RTT |
+| CBOR | 90 | 1 | 1 RTT |
+| MessagePack | 91 | 1 | 1 RTT |
+| **TLV** | **121** | **1** | 1 RTT |
+| JSONB (SQLite) | 134 | 1 | 1 RTT |
+| JSON | 150 | 1 | 1 RTT |
+| XML | 407 | 1 | 1 RTT |
+
+> **Corrected.** An earlier version of this table measured record 0, whose `Guid` is all zeros
+> and whose `Count` is zero. protobuf omits fields holding their type's default, so it scored
+> **27 bytes** there against **52** on a record with no default-valued field — a 25-byte
+> discount no other format received, since every other format on this list writes a zero the
+> same way it writes any other value. The effect is real and worth having on sparse data, which
+> RPC arguments often are, but quoting 27 as protobuf's size made it look 3× smaller than CBOR
+> when the honest gap is 3 bytes. The single-record column is now measured at record 500.
 
 **For small RPC calls, format choice changes neither packet count nor round trips.** Per-call
 latency is the RTT, whatever the encoding — a 15× size difference between protobuf and XML buys

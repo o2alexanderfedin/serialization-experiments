@@ -89,6 +89,27 @@ internal static class Network
         Console.WriteLine($"A 1,000-record batch exceeds RFC 8831's {RecommendedMessageCeilingBytes / 1024} KiB");
         Console.WriteLine("recommendation for every format measured, so a real deployment splits it.");
         Console.WriteLine();
+
+        // Record 0 is degenerate: its Guid is all zeros and its Count is zero, and protobuf
+        // omits fields holding their type's default. A single-record measurement taken at
+        // index 0 therefore flatters every format with that optimisation and charges full
+        // price to every format without it. Record 500 has no default-valued field.
+        Console.WriteLine("### One record, degenerate versus typical");
+        Console.WriteLine();
+        Console.WriteLine("| Format | record 0 | record 500 | difference |");
+        Console.WriteLine("|---|---:|---:|---:|");
+
+        Record[] typical = Profiles.All[2].Build(501)[500..];
+        foreach (Codec codec in codecs)
+        {
+            int zero = codec.Encode(Profiles.All[2].Build(1)).Length;
+            int mid = codec.Encode(typical).Length;
+            Console.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"| {codec.Name} | {zero} | {mid} | {mid - zero:+#;-#;0} |"));
+        }
+
+        Console.WriteLine();
     }
 
     /// <summary>Where the milliseconds actually go, end to end.</summary>
