@@ -14,6 +14,19 @@ namespace SerializationExperiments.Tlv;
 /// </remarks>
 public static class TlvDecoder
 {
+    /// <summary>
+    /// UTF-8 that throws on malformed input instead of substituting U+FFFD.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Encoding.UTF8"/> replaces every malformed sequence with U+FFFD, so the bytes
+    /// <c>FF</c>, an overlong <c>C0 80</c> and a genuine <c>EF BF BD</c> would all decode to the
+    /// same string. That is two documents reading back as one, which is exactly what the
+    /// canonical-varint and canonical-NaN rules exist to prevent, and re-encoding the result
+    /// would not give back the bytes that arrived.
+    /// </remarks>
+    private static readonly UTF8Encoding StrictUtf8 =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
     /// <summary>Decodes a complete document.</summary>
     /// <param name="data">Encoded document; must be consumed exactly.</param>
     /// <param name="options">
@@ -73,7 +86,7 @@ public static class TlvDecoder
         switch (type)
         {
             case TlvType.Text:
-                string value = Encoding.UTF8.GetString(data[offset..end]);
+                string value = DecodeUtf8(data[offset..end], offset, "Text value");
                 offset = end;
 
                 // The type code says this literal claims the next id. Why the encoder
@@ -84,7 +97,7 @@ public static class TlvDecoder
                 return textNode;
 
             case TlvType.TextOnce:
-                string once = Encoding.UTF8.GetString(data[offset..end]);
+                string once = DecodeUtf8(data[offset..end], offset, "Text value");
                 offset = end;
 
                 // Identical to TEXT except that it registers nothing, which is what keeps
@@ -204,6 +217,24 @@ public static class TlvDecoder
         return Leaf(type, data[start..offset], ref offset, offset, tables);
     }
 
+    /// <summary>Decodes well-formed UTF-8, refusing anything that would need substituting.</summary>
+    /// <param name="bytes">The encoded text.</param>
+    /// <param name="offset">Where it starts in the document, for the error message.</param>
+    /// <param name="what">What the text is, for the error message.</param>
+    /// <returns>The decoded string.</returns>
+    /// <exception cref="TlvFormatException">The bytes are not valid UTF-8.</exception>
+    private static string DecodeUtf8(ReadOnlySpan<byte> bytes, int offset, string what)
+    {
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new TlvFormatException($"{what} at offset {offset} is not valid UTF-8.");
+        }
+    }
+
     /// <summary>
     /// Builds a leaf node from a Type byte and its payload, understood or not.
     /// </summary>
@@ -298,7 +329,7 @@ public static class TlvDecoder
                     $"Type name at offset {offset} declares {nameLength} bytes, past the end of its frame.");
             }
 
-            typeName = Encoding.UTF8.GetString(data.Slice(offset, (int)nameLength));
+            typeName = DecodeUtf8(data.Slice(offset, (int)nameLength), offset, "Type name");
             offset += (int)nameLength;
 
             // Registered before descending, mirroring the encoder's pre-order assignment.
@@ -386,7 +417,7 @@ public static class TlvDecoder
                     $"Name at offset {offset} declares {nameLength} bytes, past the end of its element.");
             }
 
-            name = Encoding.UTF8.GetString(data.Slice(offset, (int)nameLength));
+            name = DecodeUtf8(data.Slice(offset, (int)nameLength), offset, "Element name");
             offset += (int)nameLength;
 
             // Registered before children are read, mirroring the encoder's pre-order assignment.
