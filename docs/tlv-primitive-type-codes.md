@@ -216,6 +216,9 @@ The format's existing rule is that a document has exactly one valid byte represe
 Varints must already be shortest-form. Extending that:
 
 - **Fixed-width payloads** are exactly their shape's width; there is no short form.
+- **Text, element names and type names** must be well-formed UTF-8. A malformed sequence
+  is rejected, not replaced with U+FFFD — otherwise `FF`, an overlong `C0 80` and a genuine
+  `EF BF BD` would all decode to the same string.
 - **`SINT` and `UINT`** must use the shortest varint, as now.
 - **`BIGINT`** must use the minimal two's-complement length: no leading `0x00` on a positive
   value, no leading `0xFF` on a negative one.
