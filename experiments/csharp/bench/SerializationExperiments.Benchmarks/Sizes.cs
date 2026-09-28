@@ -21,14 +21,14 @@ internal static class Sizes
         foreach (string shape in Documents.Shapes)
         {
             foreach (int count in new[] { 100, 1_000 })
-        {
-            Node tree = Documents.Build(shape, count);
-            int tlv = TlvEncoder.Encode(tree).Length;
-            int xml = Encoding.UTF8.GetByteCount(RenderXml(tree));
+            {
+                Node tree = Documents.Build(shape, count);
+                int tlv = TlvEncoder.Encode(tree).Length;
+                int xml = Encoding.UTF8.GetByteCount(RenderXml(tree));
 
-            Console.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"| {shape} | {count} | {xml:N0} | {tlv:N0} | {(double)tlv / xml:P1} |"));
+                Console.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"| {shape} | {count} | {xml:N0} | {tlv:N0} | {(double)tlv / xml:P1} |"));
             }
         }
 
