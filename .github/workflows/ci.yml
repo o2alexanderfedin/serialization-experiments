@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'bugfix/**', 'release/**', 'hotfix/**', 'support/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  csharp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: experiments/csharp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore SerializationExperiments.sln
+
+      - name: Build (warnings are errors)
+        run: dotnet build SerializationExperiments.sln --no-restore -c Release -warnaserror
+
+      - name: Test
+        run: dotnet test SerializationExperiments.sln --no-build -c Release
+
+      - name: Format
+        run: dotnet format SerializationExperiments.sln --no-restore --verify-no-changes
